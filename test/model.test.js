@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { COLORS, PALETTES, descendantsOf, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, starterMap, toOpml } from '../src/model.js'
+import { COLORS, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
 
 test('tree helpers keep descendants and layout predictable', () => {
   const root = makeNode('root', {}, { id: 'root', root: true })
@@ -11,6 +11,49 @@ test('tree helpers keep descendants and layout predictable', () => {
   assert.deepEqual([...descendantsOf('root', edges)], ['child', 'leaf'])
   const laidOut = layoutNodes([root, child, leaf], edges)
   assert.ok(laidOut.find((node) => node.id === 'child').position.x > laidOut[0].position.x)
+})
+
+test('arrow navigation follows visible node positions', () => {
+  const current = makeNode('current', { x: 100, y: 100 }, { id: 'current' })
+  const right = makeNode('right', { x: 300, y: 110 }, { id: 'right' })
+  const lowerRight = makeNode('lower right', { x: 220, y: 300 }, { id: 'lower-right' })
+  const hidden = makeNode('hidden', { x: 110, y: 180 }, { id: 'hidden' })
+  hidden.hidden = true
+  const nodes = [current, right, lowerRight, hidden]
+
+  assert.equal(nodeInDirection(nodes, current.id, 'right').id, right.id)
+  assert.equal(nodeInDirection(nodes, current.id, 'down').id, lowerRight.id)
+  assert.equal(nodeInDirection(nodes, current.id, 'left'), null)
+})
+
+test('a sibling edge is inserted immediately after the current sibling', () => {
+  const edges = [
+    makeEdge('root', 'first', 'tree', 'edge-first'),
+    makeEdge('root', 'last', 'tree', 'edge-last'),
+  ]
+  insertTreeEdgeAfter(edges, makeEdge('root', 'middle', 'tree', 'edge-middle'), 'first')
+
+  assert.deepEqual(edges.map((edge) => edge.target), ['first', 'middle', 'last'])
+  const nodes = ['root', 'first', 'middle', 'last']
+    .map((id) => makeNode(id, {}, { id, root: id === 'root' }))
+  const laidOut = layoutNodes(nodes, edges, () => null, { layout: 'tree' })
+  assert.ok(laidOut[1].position.y < laidOut[2].position.y)
+  assert.ok(laidOut[2].position.y < laidOut[3].position.y)
+})
+
+test('manual insertion opens vertical space without moving the current branch', () => {
+  const current = makeNode('current', { x: 100, y: 100 }, { id: 'current' })
+  const child = makeNode('child', { x: 300, y: 130 }, { id: 'child' })
+  const next = makeNode('next', { x: 100, y: 180 }, { id: 'next' })
+  const otherBranch = makeNode('other', { x: -200, y: 200 }, { id: 'other' })
+  const gap = layoutVerticalGap({ density: 'normal' })
+
+  shiftNodesBelow([current, child, next, otherBranch], 160, 30 + gap, new Set(['current', 'child']))
+
+  assert.equal(current.position.y, 100)
+  assert.equal(child.position.y, 130)
+  assert.equal(next.position.y, 228)
+  assert.equal(otherBranch.position.y, 248)
 })
 
 test('loaded maps are validated and cleaned', () => {

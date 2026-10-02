@@ -24,15 +24,27 @@ export function keyLabel(key, mac = IS_MAC) {
 const hasMod = (event) => event.metaKey || event.ctrlKey
 const letter = (event) => event.key.toLowerCase()
 
-export const SHORTCUT_GROUPS = ['Nodes', 'Canvas', 'Branches', 'General']
+export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Maps', 'General']
 
 export const SHORTCUTS = [
-  { id: 'addChild', group: 'Nodes', label: 'Child node', keys: ['Tab'], match: (event) => event.key === 'Tab' },
+  { id: 'addChild', group: 'Nodes', label: 'Child node', keys: ['Tab'], match: (event) => event.key === 'Tab' && !event.shiftKey },
   { id: 'addSibling', group: 'Nodes', label: 'Sibling node', keys: ['Enter'], match: (event) => event.key === 'Enter' },
+  {
+    id: 'navigate',
+    group: 'Nodes',
+    label: 'Move between nodes',
+    keys: ['←', '↑', '→', '↓'],
+    bindings: [['←'], ['↑'], ['→'], ['↓']],
+    match: (event) => !event.altKey && !event.metaKey && !event.ctrlKey
+      && ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key),
+  },
+  { id: 'typeToEdit', group: 'Nodes', label: 'Edit selected node', keys: ['type'] },
   { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
-  { id: 'noteLine', group: 'Nodes', label: 'Second line', keys: ['Shift', 'Enter'] },
   { id: 'remove', group: 'Nodes', label: 'Delete', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
   { id: 'link', group: 'Nodes', label: 'Link nodes', keys: ['drag from edge'] },
+  { id: 'noteLine', group: 'Editing', label: 'Description field', keys: ['Tab'], bindings: [['Tab'], ['Shift', 'Enter']] },
+  { id: 'finishEdit', group: 'Editing', label: 'Finish editing', keys: ['Enter'] },
+  { id: 'cancelEdit', group: 'Editing', label: 'Cancel editing', keys: ['Esc'] },
   { id: 'pan', group: 'Canvas', label: 'Pan', keys: [PAN_KEY, 'drag'] },
   { id: 'zoom', group: 'Canvas', label: 'Zoom', keys: ['Mod', 'wheel'] },
   { id: 'boxSelect', group: 'Canvas', label: 'Box select', keys: ['drag on canvas'] },
@@ -40,12 +52,19 @@ export const SHORTCUTS = [
   { id: 'collapse', group: 'Branches', label: 'Collapse', keys: ['Alt', '←'], match: (event) => event.altKey && event.key === 'ArrowLeft' },
   { id: 'expand', group: 'Branches', label: 'Expand', keys: ['Alt', '→'], match: (event) => event.altKey && event.key === 'ArrowRight' },
   { id: 'multiSelect', group: 'Branches', label: 'Select multiple', keys: [MULTI_SELECT_KEY, 'click'] },
+  { id: 'mapNavigate', group: 'Maps', label: 'Move through map list', keys: ['↑', '↓'], bindings: [['↑'], ['↓']] },
+  { id: 'mapOpen', group: 'Maps', label: 'Open map', keys: ['Enter'] },
+  { id: 'mapRename', group: 'Maps', label: 'Rename map', keys: ['F2'] },
+  { id: 'mapDuplicate', group: 'Maps', label: 'Duplicate map', keys: ['Mod', 'D'] },
+  { id: 'mapDelete', group: 'Maps', label: 'Delete map', keys: ['Delete'] },
+  { id: 'mapMenu', group: 'Maps', label: 'Open map menu', keys: ['Shift', 'F10'], bindings: [['Shift', 'F10'], ['Menu']] },
   { id: 'undo', group: 'General', label: 'Undo', keys: ['Mod', 'Z'], match: (event) => hasMod(event) && !event.shiftKey && letter(event) === 'z' },
   {
     id: 'redo',
     group: 'General',
     label: 'Redo',
     keys: ['Shift', 'Mod', 'Z'],
+    bindings: [['Shift', 'Mod', 'Z'], ['Mod', 'Y']],
     match: (event) => hasMod(event) && ((event.shiftKey && letter(event) === 'z') || letter(event) === 'y'),
   },
   // On the Russian layout Shift+/ produces a comma — check the physical key too.
@@ -65,6 +84,12 @@ export function shortcutGroups(mac = IS_MAC) {
     title,
     items: SHORTCUTS
       .filter((shortcut) => shortcut.group === title)
-      .map((shortcut) => ({ id: shortcut.id, label: shortcut.label, keys: shortcut.keys.map((key) => keyLabel(key, mac)) })),
+      .map((shortcut) => ({
+        id: shortcut.id,
+        label: shortcut.label,
+        keys: shortcut.keys.map((key) => keyLabel(key, mac)),
+        bindings: (shortcut.bindings ?? [shortcut.keys])
+          .map((binding) => binding.map((key) => keyLabel(key, mac))),
+      })),
   }))
 }

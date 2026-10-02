@@ -6,16 +6,17 @@ const key = (init) => ({ key: '', code: '', metaKey: false, ctrlKey: false, shif
 
 test('keydown events resolve to registry entries', () => {
   assert.equal(findShortcut(key({ key: 'Tab' })).id, 'addChild')
+  assert.equal(findShortcut(key({ key: 'Tab', shiftKey: true })), undefined)
   assert.equal(findShortcut(key({ key: 'Backspace' })).id, 'remove')
   assert.equal(findShortcut(key({ key: 'z', metaKey: true })).id, 'undo')
   assert.equal(findShortcut(key({ key: 'Z', ctrlKey: true, shiftKey: true })).id, 'redo')
   assert.equal(findShortcut(key({ key: 'y', ctrlKey: true })).id, 'redo')
   assert.equal(findShortcut(key({ key: 'ArrowLeft', altKey: true })).id, 'collapse')
+  assert.equal(findShortcut(key({ key: 'ArrowLeft' })).id, 'navigate')
   assert.equal(findShortcut(key({ key: '?', shiftKey: true, code: 'Slash' })).id, 'help')
   // Russian layout: Shift+/ types a comma.
   assert.equal(findShortcut(key({ key: ',', shiftKey: true, code: 'Slash' })).id, 'help')
   assert.equal(findShortcut(key({ key: 'a' })), undefined)
-  assert.equal(findShortcut(key({ key: 'ArrowLeft' })), undefined)
 })
 
 test('modifier names follow the platform', () => {
@@ -31,4 +32,10 @@ test('help groups cover every registry entry in group order', () => {
   assert.deepEqual(groups.map((group) => group.title), SHORTCUT_GROUPS)
   assert.equal(groups.flatMap((group) => group.items).length, SHORTCUTS.length)
   assert.ok(groups.every((group) => group.items.length))
+  assert.deepEqual(groups.find((group) => group.title === 'Editing').items
+    .find((item) => item.id === 'noteLine').bindings, [['Tab'], ['Shift', 'Enter']])
+  assert.deepEqual(groups.find((group) => group.title === 'General').items
+    .find((item) => item.id === 'redo').bindings, [['Shift', 'Ctrl', 'Z'], ['Ctrl', 'Y']])
+  assert.deepEqual(groups.find((group) => group.title === 'Maps').items
+    .map((item) => item.id), ['mapNavigate', 'mapOpen', 'mapRename', 'mapDuplicate', 'mapDelete', 'mapMenu'])
 })

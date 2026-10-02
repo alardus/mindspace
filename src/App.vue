@@ -2,14 +2,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
+  DEFAULT_SIZE,
   LIBRARY_STORAGE_KEY,
   PALETTES,
   STORAGE_KEY,
   branchColor,
   descendantsOf,
+  insertTreeEdgeAfter,
+  layoutVerticalGap,
   layoutNodes,
   makeEdge,
   makeNode,
+  nodeInDirection,
   normalizeLibrary,
   normalizeMap,
   normalizeSettings,
@@ -21,6 +25,7 @@ import {
   pluralNodes,
   recolorForPalette,
   relativeTime,
+  shiftNodesBelow,
   starterMap,
   toOpml,
 } from './model.js'
@@ -108,6 +113,7 @@ const { connectionStartHandle, dimensions, getNodes, setViewport, viewport, zoom
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
+const canvasElement = ref(null)
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
 function focusMap(duration = 300) {
@@ -131,6 +137,8 @@ let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
 let focusTimer
+const measuredNodeHeights = new Map()
+let pendingRevealId = null
 
 const selectedNodes = computed(() => nodes.value.filter((node) => node.selected && !node.hidden))
 const selectedCount = computed(() => selectedNodes.value.length)
@@ -274,6 +282,7 @@ function record(before) {
 function openMap(map) {
   const normalized = normalizeMap(map)
   pendingLayout = normalized.needsLayout
+  measuredNodeHeights.clear()
   title.value = normalized.title
   autoLayout.value = normalized.autoLayout
   settings.value = normalized.settings
@@ -370,10 +379,21 @@ function measuredSize(id) {
 
 let layoutAnimation = 0
 
-// Layout during editing doesn't touch zoom or camera position;
-// fitting to screen happens only on explicit request (enabling auto layout, first layout of an old map).
-function relayout(remember = true, fit = false, animate = false) {
+// Automatic layout preserves both zoom and the active node's place on screen.
+// Fitting to screen happens only on explicit request (enabling auto layout, first layout of an old map).
+function relayout(remember = true, fit = false, animate = false, anchorId = primaryNode.value?.id) {
   const before = remember ? snapshot() : null
+  const anchor = fit ? null : nodes.value.find((node) => node.id === anchorId)
+  const anchorPosition = anchor ? { ...anchor.position } : null
+  const camera = { ...viewport.value }
+  const keepAnchorStill = () => {
+    if (!anchor || !anchorPosition) return
+    setViewport({
+      x: camera.x + (anchorPosition.x - anchor.position.x) * camera.zoom,
+      y: camera.y + (anchorPosition.y - anchor.position.y) * camera.zoom,
+      zoom: camera.zoom,
+    })
+  }
   const laidOut = new Map(layoutNodes(cleanMap().nodes, edges.value, measuredSize, settings.value).map((node) => [node.id, node]))
   cancelAnimationFrame(layoutAnimation)
   const moves = []
@@ -394,44 +414,62 @@ function relayout(remember = true, fit = false, animate = false) {
       for (const { node, from, to } of moves) {
         node.position = { x: from.x + (to.x - from.x) * ease, y: from.y + (to.y - from.y) * ease }
       }
+      keepAnchorStill()
       if (t < 1) layoutAnimation = requestAnimationFrame(step)
     }
     layoutAnimation = requestAnimationFrame(step)
-  }
+  } else keepAnchorStill()
   orient()
   applyVisibility()
   record(before)
   if (fit) nextTick(() => focusMap(350))
 }
 
-function maybeRelayout() {
-  if (autoLayout.value) relayout(false)
+function maybeRelayout(anchorId) {
+  if (autoLayout.value) relayout(false, false, false, anchorId)
   else applyVisibility()
 }
 
-function addChild(parentId = primaryNode.value?.id) {
+function manualSiblingPosition(sibling) {
+  const branch = new Set([sibling.id, ...descendantsOf(sibling.id, edges.value)])
+  const branchNodes = nodes.value.filter((node) => branch.has(node.id))
+  const bottom = Math.max(...branchNodes.map((node) => node.position.y + (node.dimensions?.height || DEFAULT_SIZE.height)))
+  const gap = layoutVerticalGap(settings.value)
+  shiftNodesBelow(nodes.value, bottom, DEFAULT_SIZE.height + gap, branch)
+  return { x: sibling.position.x, y: bottom + gap }
+}
+
+function addChild(parentId = primaryNode.value?.id, afterSiblingId = null) {
   const parent = nodes.value.find((node) => node.id === parentId)
     ?? nodes.value.find((node) => node.data.root)
   if (!parent) return
   const before = snapshot()
   const childCount = edges.value.filter((edge) => edge.source === parent.id && edge.data?.kind === 'tree').length
-  const side = parent.data.root && childCount % 2 ? 'left' : (parent.data.side === 'left' ? 'left' : 'right')
-  const child = makeNode('New idea', {
+  const afterSibling = nodes.value.find((node) => node.id === afterSiblingId)
+  const side = afterSibling
+    ? (afterSibling.data.side === 'left' ? 'left' : 'right')
+    : parent.data.root && childCount % 2 ? 'left' : (parent.data.side === 'left' ? 'left' : 'right')
+  const position = !autoLayout.value && afterSibling
+    ? manualSiblingPosition(afterSibling)
+    : {
     x: side === 'left' ? parent.position.x - 100 - 180 : parent.position.x + (parent.dimensions?.width || 200) + 100,
     y: parent.position.y + childCount * 64,
-  }, {
+  }
+  const child = makeNode('New idea', position, {
     color: parent.data.root ? branchColor(childCount, settings.value.palette) : parent.data.color,
     manualColor: !parent.data.root && parent.data.manualColor,
     side,
   })
+  measuredNodeHeights.set(child.id, DEFAULT_SIZE.height)
   nodes.value.push(child)
-  edges.value.push(makeEdge(parent.id, child.id))
+  insertTreeEdgeAfter(edges.value, makeEdge(parent.id, child.id), afterSiblingId)
   orient()
   parent.data.collapsed = false
   selectOnly(child.id)
-  maybeRelayout()
+  maybeRelayout(parent.id)
   record(before)
   focusEditor(child.id)
+  revealNode(child.id)
   contextMenu.value = null
 }
 
@@ -439,18 +477,24 @@ function addSibling() {
   const current = primaryNode.value ?? nodes.value.find((node) => node.data.root)
   if (!current) return
   const parentEdge = edges.value.find((edge) => edge.target === current.id && edge.data?.kind === 'tree')
-  if (parentEdge) return addChild(parentEdge.source)
+  if (parentEdge) return addChild(parentEdge.source, current.id)
 
   const before = snapshot()
+  const position = autoLayout.value
+    ? { x: current.position.x, y: current.position.y + 112 }
+    : manualSiblingPosition(current)
   const sibling = makeNode('New idea', {
-    x: current.position.x,
-    y: current.position.y + 112,
+    x: position.x,
+    y: position.y,
   }, { root: true, color: branchColor(rootCount.value, settings.value.palette) })
-  nodes.value.push(sibling)
+  measuredNodeHeights.set(sibling.id, DEFAULT_SIZE.height)
+  const currentIndex = nodes.value.findIndex((node) => node.id === current.id)
+  nodes.value.splice(currentIndex + 1, 0, sibling)
   selectOnly(sibling.id)
-  maybeRelayout()
+  maybeRelayout(current.id)
   record(before)
   focusEditor(sibling.id)
+  revealNode(sibling.id)
   contextMenu.value = null
 }
 
@@ -558,6 +602,50 @@ function onPanelKeydown(event) {
 
 function clearSelection() {
   for (const node of nodes.value) node.selected = false
+}
+
+function ensureNodeVisible(id) {
+  const element = document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)
+  const canvas = canvasElement.value
+  if (!element || !canvas) return false
+  const bounds = element.getBoundingClientRect()
+  const canvasBounds = canvas.getBoundingClientRect()
+  const margin = 32
+  const left = canvasBounds.left + margin
+  const right = canvasBounds.right - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
+  const top = canvasBounds.top + margin
+  const bottom = canvasBounds.bottom - margin
+  const x = bounds.width > right - left
+    ? left - bounds.left
+    : bounds.left < left ? left - bounds.left : bounds.right > right ? right - bounds.right : 0
+  const y = bounds.height > bottom - top
+    ? top - bounds.top
+    : bounds.top < top ? top - bounds.top : bounds.bottom > bottom ? bottom - bounds.bottom : 0
+  if (x || y) {
+    setViewport({ x: viewport.value.x + x, y: viewport.value.y + y, zoom: viewport.value.zoom }, { duration: 180 })
+  }
+  return true
+}
+
+function revealNode(id) {
+  pendingRevealId = id
+}
+
+function revealAfterMeasurement(id) {
+  nextTick(() => requestAnimationFrame(() => {
+    if (pendingRevealId !== id) return
+    if (ensureNodeVisible(id)) pendingRevealId = null
+  }))
+}
+
+function navigateNodes(key) {
+  const direction = key.replace('Arrow', '').toLowerCase()
+  const current = primaryNode.value ?? nodes.value.find((node) => !node.hidden && node.data.root)
+  if (!current) return
+  const target = primaryNode.value ? nodeInDirection(nodes.value, current.id, direction) : current
+  if (!target) return
+  selectOnly(target.id)
+  nextTick(() => ensureNodeVisible(target.id))
 }
 
 function connectNodes(connection) {
@@ -1053,7 +1141,7 @@ function addDocument(map) {
 function newMap() {
   closeMenus()
   const root = makeNode('Central idea', { x: 0, y: 0 }, { root: true, color: PALETTES.bright.colors[0] })
-  addDocument({ version: 1, title: 'New map', autoLayout: false, nodes: [root], edges: [] })
+  addDocument({ version: 1, title: 'New map', autoLayout: true, nodes: [root], edges: [] })
   selectOnly(root.id)
   focusEditor(root.id)
 }
@@ -1086,7 +1174,7 @@ function deleteDocument(id) {
       // The last map was deleted — start with an empty one.
       createdId = documentId()
       const root = makeNode('Central idea', { x: 0, y: 0 }, { root: true, color: PALETTES.bright.colors[0] })
-      documents.value.push({ id: createdId, map: normalizeMap({ version: 2, title: 'New map', autoLayout: false, nodes: [root], edges: [] }), updatedAt: Date.now() })
+      documents.value.push({ id: createdId, map: normalizeMap({ version: 2, title: 'New map', autoLayout: true, nodes: [root], edges: [] }), updatedAt: Date.now() })
       activeId.value = createdId
       openMap(documents.value.at(-1).map)
       history.value = []
@@ -1269,6 +1357,7 @@ function runShortcut(id, event) {
     case 'redo': return redo()
     case 'addChild': return addChild()
     case 'addSibling': return addSibling()
+    case 'navigate': return navigateNodes(event.key)
     case 'remove': return removeSelected()
     case 'collapse':
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
@@ -1302,6 +1391,9 @@ function onKeydown(event) {
   if (event.key !== 'Escape' && target instanceof Element && target.closest('.island, .island-menu, .row-menu, .app-menu, .undo-toast')) return
   if (shortcut) {
     if (shortcut.id !== 'deselect') event.preventDefault()
+    // Vue Flow uses arrow keys to move selected nodes. Navigation owns these
+    // keys, so do not let the event reach the canvas' node handler.
+    if (shortcut.id === 'navigate') event.stopPropagation()
     runShortcut(shortcut.id, event)
   } else if (selectedNodes.value.length === 1 && event.key.length === 1 && !event.altKey && !event.metaKey && !event.ctrlKey && event.key !== ' ') {
     event.preventDefault()
@@ -1326,8 +1418,23 @@ function flushFocus() {
 }
 
 function onNodesChange(changes) {
-  if (!changes.some((change) => change.type === 'dimensions')) return
-  if (!autoLayout.value && !pendingLayout && !pendingFocus) return
+  const dimensionChanges = changes.filter((change) => change.type === 'dimensions')
+  if (!dimensionChanges.length) return
+  const revealId = dimensionChanges.some((change) => change.id === pendingRevealId) ? pendingRevealId : null
+  for (const change of dimensionChanges) {
+    const node = nodes.value.find((item) => item.id === change.id)
+    const height = change.dimensions?.height ?? node?.dimensions?.height
+    if (!node || !Number.isFinite(height)) continue
+    const previousHeight = measuredNodeHeights.get(node.id)
+    measuredNodeHeights.set(node.id, height)
+    if (!autoLayout.value && previousHeight && height > previousHeight + 0.5) {
+      shiftNodesBelow(nodes.value, node.position.y + previousHeight, height - previousHeight, new Set([node.id]))
+    }
+  }
+  if (!autoLayout.value && !pendingLayout && !pendingFocus) {
+    if (revealId) revealAfterMeasurement(revealId)
+    return
+  }
   cancelAnimationFrame(layoutFrame)
   layoutFrame = requestAnimationFrame(() => {
     if (dragStart) return
@@ -1337,6 +1444,7 @@ function onNodesChange(changes) {
       relayout(false, fit)
     }
     flushFocus()
+    if (revealId) revealAfterMeasurement(revealId)
   })
 }
 
@@ -1365,7 +1473,8 @@ watch([nodes, edges, title, autoLayout, settings], () => {
 onMounted(() => {
   applyVisibility()
   persistDocuments()
-  window.addEventListener('keydown', onKeydown)
+  // Capture keyboard navigation before Vue Flow can move the selected node.
+  window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('pagehide', persistDocuments)
   clockTimer = setInterval(() => (now.value = Date.now()), 60000)
   showShortcutsTip()
@@ -1383,7 +1492,7 @@ function showShortcutsTip() {
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('pagehide', persistDocuments)
   persistDocuments(false)
   clearTimeout(saveTimer)
@@ -1398,7 +1507,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section class="canvas-wrap" :class="{ linking: connectionStartHandle }">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle }">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -1436,6 +1545,7 @@ onBeforeUnmount(() => {
           <template #node-mind="{ id, data, selected }">
             <div
               class="mind-node"
+              :data-mind-node="id"
               :class="[`style-${nodeStyle(data)}`, `side-${data.side}`, `kids-${childrenSide(id, data)}`, {
                 selected,
                 root: data.root,
@@ -1445,6 +1555,7 @@ onBeforeUnmount(() => {
                 'drop-target': dropTargetId === id,
               }]"
               :style="{ '--branch': data.color }"
+              :aria-current="selected ? 'true' : undefined"
             >
               <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" />
               <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" title="Drag to link to another node" />
@@ -1476,6 +1587,7 @@ onBeforeUnmount(() => {
                   placeholder="Details"
                   aria-label="Second line"
                   @keydown.enter.prevent="finishEditing()"
+                  @keydown.tab.exact.prevent="finishEditing()"
                   @keydown.esc.prevent="finishEditing(false)"
                 />
               </div>
@@ -1929,7 +2041,12 @@ onBeforeUnmount(() => {
                 <dl>
                   <div v-for="item in group.items" :key="item.id" class="help-row">
                     <dt>{{ item.label }}</dt>
-                    <dd><kbd v-for="key in item.keys" :key="key">{{ key }}</kbd></dd>
+                    <dd>
+                      <template v-for="(binding, index) in item.bindings" :key="binding.join('-')">
+                        <span v-if="index" class="help-or">or</span>
+                        <span class="help-binding"><kbd v-for="key in binding" :key="key">{{ key }}</kbd></span>
+                      </template>
+                    </dd>
                   </div>
                 </dl>
               </section>
