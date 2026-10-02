@@ -74,6 +74,15 @@ export function makeEdge(source, target, kind = 'tree', id = uid()) {
   return { id, source, target, type: edgeKind === 'tree' ? 'branch' : 'smoothstep', class: edgeKind === 'link' ? 'relation-edge' : 'tree-edge', data: { kind: edgeKind } }
 }
 
+export function insertTreeEdgeAfter(edges, edge, siblingId) {
+  const siblingIndex = edges.findIndex((item) => item.data?.kind === 'tree'
+    && item.source === edge.source
+    && item.target === siblingId)
+  if (siblingIndex < 0) edges.push(edge)
+  else edges.splice(siblingIndex + 1, 0, edge)
+  return edge
+}
+
 export function orientEdges(nodes, edges, layout = 'both') {
   const nodesById = new Map(nodes.map((node) => [node.id, node]))
   for (const edge of edges) {

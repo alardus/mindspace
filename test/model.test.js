@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { COLORS, PALETTES, descendantsOf, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, starterMap, toOpml } from '../src/model.js'
+import { COLORS, PALETTES, descendantsOf, insertTreeEdgeAfter, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, starterMap, toOpml } from '../src/model.js'
 
 test('tree helpers keep descendants and layout predictable', () => {
   const root = makeNode('root', {}, { id: 'root', root: true })
@@ -24,6 +24,25 @@ test('arrow navigation follows visible node positions', () => {
   assert.equal(nodeInDirection(nodes, current.id, 'right').id, right.id)
   assert.equal(nodeInDirection(nodes, current.id, 'down').id, lowerRight.id)
   assert.equal(nodeInDirection(nodes, current.id, 'left'), null)
+})
+
+test('a sibling edge is inserted immediately after the current sibling', () => {
+  const edges = [
+    makeEdge('root', 'first', 'tree', 'edge-first'),
+    makeEdge('root', 'last', 'tree', 'edge-last'),
+  ]
+  insertTreeEdgeAfter(edges, makeEdge('root', 'middle', 'tree', 'edge-middle'), 'first')
+
+  assert.deepEqual(edges.map((edge) => edge.target), ['first', 'middle', 'last'])
+  const nodes = ['root', 'first', 'middle', 'last']
+    .map((id) => makeNode(id, {}, { id, root: id === 'root' }))
+  const laidOut = layoutNodes(nodes, edges, () => null, { layout: 'tree' })
+  assert.deepEqual(
+    laidOut.slice(1).map((node) => node.id),
+    ['first', 'middle', 'last'],
+  )
+  assert.ok(laidOut[1].position.y < laidOut[2].position.y)
+  assert.ok(laidOut[2].position.y < laidOut[3].position.y)
 })
 
 test('loaded maps are validated and cleaned', () => {

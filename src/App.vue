@@ -7,6 +7,7 @@ import {
   STORAGE_KEY,
   branchColor,
   descendantsOf,
+  insertTreeEdgeAfter,
   layoutNodes,
   makeEdge,
   makeNode,
@@ -427,13 +428,16 @@ function maybeRelayout(anchorId) {
   else applyVisibility()
 }
 
-function addChild(parentId = primaryNode.value?.id) {
+function addChild(parentId = primaryNode.value?.id, afterSiblingId = null) {
   const parent = nodes.value.find((node) => node.id === parentId)
     ?? nodes.value.find((node) => node.data.root)
   if (!parent) return
   const before = snapshot()
   const childCount = edges.value.filter((edge) => edge.source === parent.id && edge.data?.kind === 'tree').length
-  const side = parent.data.root && childCount % 2 ? 'left' : (parent.data.side === 'left' ? 'left' : 'right')
+  const afterSibling = nodes.value.find((node) => node.id === afterSiblingId)
+  const side = afterSibling
+    ? (afterSibling.data.side === 'left' ? 'left' : 'right')
+    : parent.data.root && childCount % 2 ? 'left' : (parent.data.side === 'left' ? 'left' : 'right')
   const child = makeNode('New idea', {
     x: side === 'left' ? parent.position.x - 100 - 180 : parent.position.x + (parent.dimensions?.width || 200) + 100,
     y: parent.position.y + childCount * 64,
@@ -443,7 +447,7 @@ function addChild(parentId = primaryNode.value?.id) {
     side,
   })
   nodes.value.push(child)
-  edges.value.push(makeEdge(parent.id, child.id))
+  insertTreeEdgeAfter(edges.value, makeEdge(parent.id, child.id), afterSiblingId)
   orient()
   parent.data.collapsed = false
   selectOnly(child.id)
@@ -457,14 +461,15 @@ function addSibling() {
   const current = primaryNode.value ?? nodes.value.find((node) => node.data.root)
   if (!current) return
   const parentEdge = edges.value.find((edge) => edge.target === current.id && edge.data?.kind === 'tree')
-  if (parentEdge) return addChild(parentEdge.source)
+  if (parentEdge) return addChild(parentEdge.source, current.id)
 
   const before = snapshot()
   const sibling = makeNode('New idea', {
     x: current.position.x,
     y: current.position.y + 112,
   }, { root: true, color: branchColor(rootCount.value, settings.value.palette) })
-  nodes.value.push(sibling)
+  const currentIndex = nodes.value.findIndex((node) => node.id === current.id)
+  nodes.value.splice(currentIndex + 1, 0, sibling)
   selectOnly(sibling.id)
   maybeRelayout(current.id)
   record(before)
@@ -1351,6 +1356,9 @@ function onKeydown(event) {
   if (event.key !== 'Escape' && target instanceof Element && target.closest('.island, .island-menu, .row-menu, .app-menu, .undo-toast')) return
   if (shortcut) {
     if (shortcut.id !== 'deselect') event.preventDefault()
+    // Vue Flow uses arrow keys to move selected nodes. Navigation owns these
+    // keys, so do not let the event reach the canvas' node handler.
+    if (shortcut.id === 'navigate') event.stopPropagation()
     runShortcut(shortcut.id, event)
   } else if (selectedNodes.value.length === 1 && event.key.length === 1 && !event.altKey && !event.metaKey && !event.ctrlKey && event.key !== ' ') {
     event.preventDefault()
@@ -1414,7 +1422,8 @@ watch([nodes, edges, title, autoLayout, settings], () => {
 onMounted(() => {
   applyVisibility()
   persistDocuments()
-  window.addEventListener('keydown', onKeydown)
+  // Capture keyboard navigation before Vue Flow can move the selected node.
+  window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('pagehide', persistDocuments)
   clockTimer = setInterval(() => (now.value = Date.now()), 60000)
   showShortcutsTip()
@@ -1432,7 +1441,7 @@ function showShortcutsTip() {
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('pagehide', persistDocuments)
   persistDocuments(false)
   clearTimeout(saveTimer)
