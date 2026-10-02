@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { COLORS, PALETTES, descendantsOf, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, starterMap, toOpml } from '../src/model.js'
+import { COLORS, PALETTES, descendantsOf, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, starterMap, toOpml } from '../src/model.js'
 
 test('tree helpers keep descendants and layout predictable', () => {
   const root = makeNode('root', {}, { id: 'root', root: true })
@@ -11,6 +11,19 @@ test('tree helpers keep descendants and layout predictable', () => {
   assert.deepEqual([...descendantsOf('root', edges)], ['child', 'leaf'])
   const laidOut = layoutNodes([root, child, leaf], edges)
   assert.ok(laidOut.find((node) => node.id === 'child').position.x > laidOut[0].position.x)
+})
+
+test('arrow navigation follows visible node positions', () => {
+  const current = makeNode('current', { x: 100, y: 100 }, { id: 'current' })
+  const right = makeNode('right', { x: 300, y: 110 }, { id: 'right' })
+  const lowerRight = makeNode('lower right', { x: 220, y: 300 }, { id: 'lower-right' })
+  const hidden = makeNode('hidden', { x: 110, y: 180 }, { id: 'hidden' })
+  hidden.hidden = true
+  const nodes = [current, right, lowerRight, hidden]
+
+  assert.equal(nodeInDirection(nodes, current.id, 'right').id, right.id)
+  assert.equal(nodeInDirection(nodes, current.id, 'down').id, lowerRight.id)
+  assert.equal(nodeInDirection(nodes, current.id, 'left'), null)
 })
 
 test('loaded maps are validated and cleaned', () => {

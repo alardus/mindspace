@@ -106,6 +106,38 @@ export function descendantsOf(id, edges) {
   return found
 }
 
+// Pick the visually nearest node in an arrow-key direction. This follows the
+// current layout on screen, so it also works for manually positioned maps.
+export function nodeInDirection(nodes, currentId, direction) {
+  const current = nodes.find((node) => node.id === currentId && !node.hidden)
+  if (!current) return null
+  const center = (node) => ({
+    x: node.position.x + (node.dimensions?.width || DEFAULT_SIZE.width) / 2,
+    y: node.position.y + (node.dimensions?.height || DEFAULT_SIZE.height) / 2,
+  })
+  const origin = center(current)
+  const horizontal = direction === 'left' || direction === 'right'
+  const sign = direction === 'left' || direction === 'up' ? -1 : 1
+  let best = null
+  let bestScore = Infinity
+  for (const node of nodes) {
+    if (node.id === current.id || node.hidden) continue
+    const point = center(node)
+    const dx = point.x - origin.x
+    const dy = point.y - origin.y
+    const forward = (horizontal ? dx : dy) * sign
+    if (forward <= 0) continue
+    const sideways = Math.abs(horizontal ? dy : dx)
+    if (forward * 2 < sideways) continue
+    const score = forward + sideways * 2
+    if (score < bestScore) {
+      best = node
+      bestScore = score
+    }
+  }
+  return best
+}
+
 export const DEFAULT_SIZE = { width: 180, height: 30, rootWidth: 200, rootHeight: 56 }
 
 export function layoutNodes(nodes, edges, sizeOf = () => null, settings = DEFAULT_SETTINGS) {

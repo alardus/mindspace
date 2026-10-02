@@ -6,16 +6,17 @@ const key = (init) => ({ key: '', code: '', metaKey: false, ctrlKey: false, shif
 
 test('keydown events resolve to registry entries', () => {
   assert.equal(findShortcut(key({ key: 'Tab' })).id, 'addChild')
+  assert.equal(findShortcut(key({ key: 'Tab', shiftKey: true })), undefined)
   assert.equal(findShortcut(key({ key: 'Backspace' })).id, 'remove')
   assert.equal(findShortcut(key({ key: 'z', metaKey: true })).id, 'undo')
   assert.equal(findShortcut(key({ key: 'Z', ctrlKey: true, shiftKey: true })).id, 'redo')
   assert.equal(findShortcut(key({ key: 'y', ctrlKey: true })).id, 'redo')
   assert.equal(findShortcut(key({ key: 'ArrowLeft', altKey: true })).id, 'collapse')
+  assert.equal(findShortcut(key({ key: 'ArrowLeft' })).id, 'navigate')
   assert.equal(findShortcut(key({ key: '?', shiftKey: true, code: 'Slash' })).id, 'help')
   // Russian layout: Shift+/ types a comma.
   assert.equal(findShortcut(key({ key: ',', shiftKey: true, code: 'Slash' })).id, 'help')
   assert.equal(findShortcut(key({ key: 'a' })), undefined)
-  assert.equal(findShortcut(key({ key: 'ArrowLeft' })), undefined)
 })
 
 test('modifier names follow the platform', () => {

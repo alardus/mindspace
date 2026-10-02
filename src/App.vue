@@ -10,6 +10,7 @@ import {
   layoutNodes,
   makeEdge,
   makeNode,
+  nodeInDirection,
   normalizeLibrary,
   normalizeMap,
   normalizeSettings,
@@ -370,10 +371,26 @@ function measuredSize(id) {
 
 let layoutAnimation = 0
 
-// Layout during editing doesn't touch zoom or camera position;
-// fitting to screen happens only on explicit request (enabling auto layout, first layout of an old map).
-function relayout(remember = true, fit = false, animate = false) {
+// Automatic layout preserves both zoom and the active node's place on screen.
+// Fitting to screen happens only on explicit request (enabling auto layout, first layout of an old map).
+function relayout(remember = true, fit = false, animate = false, anchorId = primaryNode.value?.id) {
   const before = remember ? snapshot() : null
+  const anchor = fit ? null : nodes.value.find((node) => node.id === anchorId)
+  const camera = { ...viewport.value }
+  const anchorScreen = anchor ? {
+    x: (anchor.position.x + (anchor.dimensions?.width || 180) / 2) * camera.zoom + camera.x,
+    y: (anchor.position.y + (anchor.dimensions?.height || 30) / 2) * camera.zoom + camera.y,
+  } : null
+  const keepAnchorStill = () => {
+    if (!anchor || !anchorScreen) return
+    const centerX = anchor.position.x + (anchor.dimensions?.width || 180) / 2
+    const centerY = anchor.position.y + (anchor.dimensions?.height || 30) / 2
+    setViewport({
+      x: anchorScreen.x - centerX * camera.zoom,
+      y: anchorScreen.y - centerY * camera.zoom,
+      zoom: camera.zoom,
+    })
+  }
   const laidOut = new Map(layoutNodes(cleanMap().nodes, edges.value, measuredSize, settings.value).map((node) => [node.id, node]))
   cancelAnimationFrame(layoutAnimation)
   const moves = []
@@ -394,18 +411,19 @@ function relayout(remember = true, fit = false, animate = false) {
       for (const { node, from, to } of moves) {
         node.position = { x: from.x + (to.x - from.x) * ease, y: from.y + (to.y - from.y) * ease }
       }
+      keepAnchorStill()
       if (t < 1) layoutAnimation = requestAnimationFrame(step)
     }
     layoutAnimation = requestAnimationFrame(step)
-  }
+  } else keepAnchorStill()
   orient()
   applyVisibility()
   record(before)
   if (fit) nextTick(() => focusMap(350))
 }
 
-function maybeRelayout() {
-  if (autoLayout.value) relayout(false)
+function maybeRelayout(anchorId) {
+  if (autoLayout.value) relayout(false, false, false, anchorId)
   else applyVisibility()
 }
 
@@ -429,7 +447,7 @@ function addChild(parentId = primaryNode.value?.id) {
   orient()
   parent.data.collapsed = false
   selectOnly(child.id)
-  maybeRelayout()
+  maybeRelayout(parent.id)
   record(before)
   focusEditor(child.id)
   contextMenu.value = null
@@ -448,7 +466,7 @@ function addSibling() {
   }, { root: true, color: branchColor(rootCount.value, settings.value.palette) })
   nodes.value.push(sibling)
   selectOnly(sibling.id)
-  maybeRelayout()
+  maybeRelayout(current.id)
   record(before)
   focusEditor(sibling.id)
   contextMenu.value = null
@@ -558,6 +576,36 @@ function onPanelKeydown(event) {
 
 function clearSelection() {
   for (const node of nodes.value) node.selected = false
+}
+
+function ensureNodeVisible(id) {
+  const node = nodes.value.find((item) => item.id === id)
+  if (!node) return
+  const camera = viewport.value
+  const { width, height } = dimensions.value
+  const availableWidth = width - (inspectorOpen.value ? INSPECTOR_SPACE : 0)
+  const margin = 32
+  const left = node.position.x * camera.zoom + camera.x
+  const top = node.position.y * camera.zoom + camera.y
+  const right = left + (node.dimensions?.width || 180) * camera.zoom
+  const bottom = top + (node.dimensions?.height || 30) * camera.zoom
+  let x = camera.x
+  let y = camera.y
+  if (left < margin) x += margin - left
+  else if (right > availableWidth - margin) x -= right - (availableWidth - margin)
+  if (top < margin) y += margin - top
+  else if (bottom > height - margin) y -= bottom - (height - margin)
+  if (x !== camera.x || y !== camera.y) setViewport({ x, y, zoom: camera.zoom }, { duration: 180 })
+}
+
+function navigateNodes(key) {
+  const direction = key.replace('Arrow', '').toLowerCase()
+  const current = primaryNode.value ?? nodes.value.find((node) => !node.hidden && node.data.root)
+  if (!current) return
+  const target = primaryNode.value ? nodeInDirection(nodes.value, current.id, direction) : current
+  if (!target) return
+  selectOnly(target.id)
+  nextTick(() => ensureNodeVisible(target.id))
 }
 
 function connectNodes(connection) {
@@ -1053,7 +1101,7 @@ function addDocument(map) {
 function newMap() {
   closeMenus()
   const root = makeNode('Central idea', { x: 0, y: 0 }, { root: true, color: PALETTES.bright.colors[0] })
-  addDocument({ version: 1, title: 'New map', autoLayout: false, nodes: [root], edges: [] })
+  addDocument({ version: 1, title: 'New map', autoLayout: true, nodes: [root], edges: [] })
   selectOnly(root.id)
   focusEditor(root.id)
 }
@@ -1086,7 +1134,7 @@ function deleteDocument(id) {
       // The last map was deleted — start with an empty one.
       createdId = documentId()
       const root = makeNode('Central idea', { x: 0, y: 0 }, { root: true, color: PALETTES.bright.colors[0] })
-      documents.value.push({ id: createdId, map: normalizeMap({ version: 2, title: 'New map', autoLayout: false, nodes: [root], edges: [] }), updatedAt: Date.now() })
+      documents.value.push({ id: createdId, map: normalizeMap({ version: 2, title: 'New map', autoLayout: true, nodes: [root], edges: [] }), updatedAt: Date.now() })
       activeId.value = createdId
       openMap(documents.value.at(-1).map)
       history.value = []
@@ -1269,6 +1317,7 @@ function runShortcut(id, event) {
     case 'redo': return redo()
     case 'addChild': return addChild()
     case 'addSibling': return addSibling()
+    case 'navigate': return navigateNodes(event.key)
     case 'remove': return removeSelected()
     case 'collapse':
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
@@ -1445,6 +1494,7 @@ onBeforeUnmount(() => {
                 'drop-target': dropTargetId === id,
               }]"
               :style="{ '--branch': data.color }"
+              :aria-current="selected ? 'true' : undefined"
             >
               <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" />
               <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" title="Drag to link to another node" />

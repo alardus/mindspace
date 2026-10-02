@@ -27,8 +27,16 @@ const letter = (event) => event.key.toLowerCase()
 export const SHORTCUT_GROUPS = ['Nodes', 'Canvas', 'Branches', 'General']
 
 export const SHORTCUTS = [
-  { id: 'addChild', group: 'Nodes', label: 'Child node', keys: ['Tab'], match: (event) => event.key === 'Tab' },
+  { id: 'addChild', group: 'Nodes', label: 'Child node', keys: ['Tab'], match: (event) => event.key === 'Tab' && !event.shiftKey },
   { id: 'addSibling', group: 'Nodes', label: 'Sibling node', keys: ['Enter'], match: (event) => event.key === 'Enter' },
+  {
+    id: 'navigate',
+    group: 'Nodes',
+    label: 'Move between nodes',
+    keys: ['←', '↑', '→', '↓'],
+    match: (event) => !event.altKey && !event.metaKey && !event.ctrlKey
+      && ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key),
+  },
   { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
   { id: 'noteLine', group: 'Nodes', label: 'Second line', keys: ['Shift', 'Enter'] },
   { id: 'remove', group: 'Nodes', label: 'Delete', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
