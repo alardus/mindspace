@@ -2041,7 +2041,12 @@ onBeforeUnmount(() => {
                 <dl>
                   <div v-for="item in group.items" :key="item.id" class="help-row">
                     <dt>{{ item.label }}</dt>
-                    <dd><kbd v-for="key in item.keys" :key="key">{{ key }}</kbd></dd>
+                    <dd>
+                      <template v-for="(binding, index) in item.bindings" :key="binding.join('-')">
+                        <span v-if="index" class="help-or">or</span>
+                        <span class="help-binding"><kbd v-for="key in binding" :key="key">{{ key }}</kbd></span>
+                      </template>
+                    </dd>
                   </div>
                 </dl>
               </section>

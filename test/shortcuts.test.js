@@ -32,4 +32,10 @@ test('help groups cover every registry entry in group order', () => {
   assert.deepEqual(groups.map((group) => group.title), SHORTCUT_GROUPS)
   assert.equal(groups.flatMap((group) => group.items).length, SHORTCUTS.length)
   assert.ok(groups.every((group) => group.items.length))
+  assert.deepEqual(groups.find((group) => group.title === 'Editing').items
+    .find((item) => item.id === 'noteLine').bindings, [['Tab'], ['Shift', 'Enter']])
+  assert.deepEqual(groups.find((group) => group.title === 'General').items
+    .find((item) => item.id === 'redo').bindings, [['Shift', 'Ctrl', 'Z'], ['Ctrl', 'Y']])
+  assert.deepEqual(groups.find((group) => group.title === 'Maps').items
+    .map((item) => item.id), ['mapNavigate', 'mapOpen', 'mapRename', 'mapDuplicate', 'mapDelete', 'mapMenu'])
 })

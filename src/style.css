@@ -55,7 +55,8 @@ button { color: inherit; }
 .help-group dl { margin: 0; }
 .help-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 32px; }
 .help-row dt { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.help-row dd { flex: none; display: flex; gap: 4px; margin: 0; }
+.help-row dd, .help-binding { flex: none; display: flex; align-items: center; gap: 4px; margin: 0; }
+.help-or { color: #8A8E86; font-size: 11px; }
 @media (max-width: 559px) {
   .help-body { grid-template-columns: minmax(0, 1fr); }
 }
