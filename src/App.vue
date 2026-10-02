@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
+  DEFAULT_SIZE,
   LIBRARY_STORAGE_KEY,
   PALETTES,
   STORAGE_KEY,
   branchColor,
   descendantsOf,
   insertTreeEdgeAfter,
+  layoutVerticalGap,
   layoutNodes,
   makeEdge,
   makeNode,
@@ -23,6 +25,7 @@ import {
   pluralNodes,
   recolorForPalette,
   relativeTime,
+  shiftNodesBelow,
   starterMap,
   toOpml,
 } from './model.js'
@@ -133,6 +136,7 @@ let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
 let focusTimer
+const measuredNodeHeights = new Map()
 
 const selectedNodes = computed(() => nodes.value.filter((node) => node.selected && !node.hidden))
 const selectedCount = computed(() => selectedNodes.value.length)
@@ -276,6 +280,7 @@ function record(before) {
 function openMap(map) {
   const normalized = normalizeMap(map)
   pendingLayout = normalized.needsLayout
+  measuredNodeHeights.clear()
   title.value = normalized.title
   autoLayout.value = normalized.autoLayout
   settings.value = normalized.settings
@@ -428,6 +433,15 @@ function maybeRelayout(anchorId) {
   else applyVisibility()
 }
 
+function manualSiblingPosition(sibling) {
+  const branch = new Set([sibling.id, ...descendantsOf(sibling.id, edges.value)])
+  const branchNodes = nodes.value.filter((node) => branch.has(node.id))
+  const bottom = Math.max(...branchNodes.map((node) => node.position.y + (node.dimensions?.height || DEFAULT_SIZE.height)))
+  const gap = layoutVerticalGap(settings.value)
+  shiftNodesBelow(nodes.value, bottom, DEFAULT_SIZE.height + gap, branch)
+  return { x: sibling.position.x, y: bottom + gap }
+}
+
 function addChild(parentId = primaryNode.value?.id, afterSiblingId = null) {
   const parent = nodes.value.find((node) => node.id === parentId)
     ?? nodes.value.find((node) => node.data.root)
@@ -438,14 +452,18 @@ function addChild(parentId = primaryNode.value?.id, afterSiblingId = null) {
   const side = afterSibling
     ? (afterSibling.data.side === 'left' ? 'left' : 'right')
     : parent.data.root && childCount % 2 ? 'left' : (parent.data.side === 'left' ? 'left' : 'right')
-  const child = makeNode('New idea', {
+  const position = !autoLayout.value && afterSibling
+    ? manualSiblingPosition(afterSibling)
+    : {
     x: side === 'left' ? parent.position.x - 100 - 180 : parent.position.x + (parent.dimensions?.width || 200) + 100,
     y: parent.position.y + childCount * 64,
-  }, {
+  }
+  const child = makeNode('New idea', position, {
     color: parent.data.root ? branchColor(childCount, settings.value.palette) : parent.data.color,
     manualColor: !parent.data.root && parent.data.manualColor,
     side,
   })
+  measuredNodeHeights.set(child.id, DEFAULT_SIZE.height)
   nodes.value.push(child)
   insertTreeEdgeAfter(edges.value, makeEdge(parent.id, child.id), afterSiblingId)
   orient()
@@ -464,10 +482,14 @@ function addSibling() {
   if (parentEdge) return addChild(parentEdge.source, current.id)
 
   const before = snapshot()
+  const position = autoLayout.value
+    ? { x: current.position.x, y: current.position.y + 112 }
+    : manualSiblingPosition(current)
   const sibling = makeNode('New idea', {
-    x: current.position.x,
-    y: current.position.y + 112,
+    x: position.x,
+    y: position.y,
   }, { root: true, color: branchColor(rootCount.value, settings.value.palette) })
+  measuredNodeHeights.set(sibling.id, DEFAULT_SIZE.height)
   const currentIndex = nodes.value.findIndex((node) => node.id === current.id)
   nodes.value.splice(currentIndex + 1, 0, sibling)
   selectOnly(sibling.id)
@@ -1383,7 +1405,18 @@ function flushFocus() {
 }
 
 function onNodesChange(changes) {
-  if (!changes.some((change) => change.type === 'dimensions')) return
+  const dimensionChanges = changes.filter((change) => change.type === 'dimensions')
+  if (!dimensionChanges.length) return
+  for (const change of dimensionChanges) {
+    const node = nodes.value.find((item) => item.id === change.id)
+    const height = change.dimensions?.height ?? node?.dimensions?.height
+    if (!node || !Number.isFinite(height)) continue
+    const previousHeight = measuredNodeHeights.get(node.id)
+    measuredNodeHeights.set(node.id, height)
+    if (!autoLayout.value && previousHeight && height > previousHeight + 0.5) {
+      shiftNodesBelow(nodes.value, node.position.y + previousHeight, height - previousHeight, new Set([node.id]))
+    }
+  }
   if (!autoLayout.value && !pendingLayout && !pendingFocus) return
   cancelAnimationFrame(layoutFrame)
   layoutFrame = requestAnimationFrame(() => {

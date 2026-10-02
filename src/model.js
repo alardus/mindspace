@@ -149,10 +149,22 @@ export function nodeInDirection(nodes, currentId, direction) {
 
 export const DEFAULT_SIZE = { width: 180, height: 30, rootWidth: 200, rootHeight: 56 }
 
+export function layoutVerticalGap(settings = DEFAULT_SETTINGS) {
+  return 18 * DENSITY[normalizeSettings(settings).density]
+}
+
+export function shiftNodesBelow(nodes, y, amount, excluded = new Set()) {
+  if (amount <= 0) return
+  for (const node of nodes) {
+    if (excluded.has(node.id) || node.position.y < y - 0.5) continue
+    node.position = { ...node.position, y: node.position.y + amount }
+  }
+}
+
 export function layoutNodes(nodes, edges, sizeOf = () => null, settings = DEFAULT_SETTINGS) {
   const { layout, density } = normalizeSettings(settings)
   const horizontalGap = 100
-  const verticalGap = 18 * DENSITY[density]
+  const verticalGap = layoutVerticalGap({ density })
   const treeIndent = 36
   const treeGap = 140
   const treeEdges = edges.filter((edge) => edge.data?.kind === 'tree')

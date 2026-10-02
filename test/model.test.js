@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { COLORS, PALETTES, descendantsOf, insertTreeEdgeAfter, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, starterMap, toOpml } from '../src/model.js'
+import { COLORS, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
 
 test('tree helpers keep descendants and layout predictable', () => {
   const root = makeNode('root', {}, { id: 'root', root: true })
@@ -43,6 +43,21 @@ test('a sibling edge is inserted immediately after the current sibling', () => {
   )
   assert.ok(laidOut[1].position.y < laidOut[2].position.y)
   assert.ok(laidOut[2].position.y < laidOut[3].position.y)
+})
+
+test('manual insertion opens vertical space without moving the current branch', () => {
+  const current = makeNode('current', { x: 100, y: 100 }, { id: 'current' })
+  const child = makeNode('child', { x: 300, y: 130 }, { id: 'child' })
+  const next = makeNode('next', { x: 100, y: 180 }, { id: 'next' })
+  const otherBranch = makeNode('other', { x: -200, y: 200 }, { id: 'other' })
+  const gap = layoutVerticalGap({ density: 'normal' })
+
+  shiftNodesBelow([current, child, next, otherBranch], 160, 30 + gap, new Set(['current', 'child']))
+
+  assert.equal(current.position.y, 100)
+  assert.equal(child.position.y, 130)
+  assert.equal(next.position.y, 228)
+  assert.equal(otherBranch.position.y, 248)
 })
 
 test('loaded maps are validated and cleaned', () => {
