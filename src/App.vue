@@ -136,6 +136,7 @@ let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
 let focusTimer
+let revealFrame = 0
 const measuredNodeHeights = new Map()
 
 const selectedNodes = computed(() => nodes.value.filter((node) => node.selected && !node.hidden))
@@ -472,6 +473,7 @@ function addChild(parentId = primaryNode.value?.id, afterSiblingId = null) {
   maybeRelayout(parent.id)
   record(before)
   focusEditor(child.id)
+  revealNode(child.id)
   contextMenu.value = null
 }
 
@@ -496,6 +498,7 @@ function addSibling() {
   maybeRelayout(current.id)
   record(before)
   focusEditor(sibling.id)
+  revealNode(sibling.id)
   contextMenu.value = null
 }
 
@@ -623,6 +626,13 @@ function ensureNodeVisible(id) {
   if (top < margin) y += margin - top
   else if (bottom > height - margin) y -= bottom - (height - margin)
   if (x !== camera.x || y !== camera.y) setViewport({ x, y, zoom: camera.zoom }, { duration: 180 })
+}
+
+function revealNode(id) {
+  nextTick(() => {
+    cancelAnimationFrame(revealFrame)
+    revealFrame = requestAnimationFrame(() => ensureNodeVisible(id))
+  })
 }
 
 function navigateNodes(key) {
@@ -1482,6 +1492,7 @@ onBeforeUnmount(() => {
   clearTimeout(copiedTimer)
   clearInterval(clockTimer)
   cancelAnimationFrame(layoutFrame)
+  cancelAnimationFrame(revealFrame)
   clearTimeout(focusTimer)
 })
 </script>
