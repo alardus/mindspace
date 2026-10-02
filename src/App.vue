@@ -136,7 +136,6 @@ let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
 let focusTimer
-let revealFrame = 0
 const measuredNodeHeights = new Map()
 
 const selectedNodes = computed(() => nodes.value.filter((node) => node.selected && !node.hidden))
@@ -383,18 +382,13 @@ let layoutAnimation = 0
 function relayout(remember = true, fit = false, animate = false, anchorId = primaryNode.value?.id) {
   const before = remember ? snapshot() : null
   const anchor = fit ? null : nodes.value.find((node) => node.id === anchorId)
+  const anchorPosition = anchor ? { ...anchor.position } : null
   const camera = { ...viewport.value }
-  const anchorScreen = anchor ? {
-    x: (anchor.position.x + (anchor.dimensions?.width || 180) / 2) * camera.zoom + camera.x,
-    y: (anchor.position.y + (anchor.dimensions?.height || 30) / 2) * camera.zoom + camera.y,
-  } : null
   const keepAnchorStill = () => {
-    if (!anchor || !anchorScreen) return
-    const centerX = anchor.position.x + (anchor.dimensions?.width || 180) / 2
-    const centerY = anchor.position.y + (anchor.dimensions?.height || 30) / 2
+    if (!anchor || !anchorPosition) return
     setViewport({
-      x: anchorScreen.x - centerX * camera.zoom,
-      y: anchorScreen.y - centerY * camera.zoom,
+      x: camera.x + (anchorPosition.x - anchor.position.x) * camera.zoom,
+      y: camera.y + (anchorPosition.y - anchor.position.y) * camera.zoom,
       zoom: camera.zoom,
     })
   }
@@ -629,10 +623,7 @@ function ensureNodeVisible(id) {
 }
 
 function revealNode(id) {
-  nextTick(() => {
-    cancelAnimationFrame(revealFrame)
-    revealFrame = requestAnimationFrame(() => ensureNodeVisible(id))
-  })
+  nextTick(() => requestAnimationFrame(() => ensureNodeVisible(id)))
 }
 
 function navigateNodes(key) {
@@ -1492,7 +1483,6 @@ onBeforeUnmount(() => {
   clearTimeout(copiedTimer)
   clearInterval(clockTimer)
   cancelAnimationFrame(layoutFrame)
-  cancelAnimationFrame(revealFrame)
   clearTimeout(focusTimer)
 })
 </script>

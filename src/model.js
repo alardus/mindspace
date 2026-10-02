@@ -80,7 +80,6 @@ export function insertTreeEdgeAfter(edges, edge, siblingId) {
     && item.target === siblingId)
   if (siblingIndex < 0) edges.push(edge)
   else edges.splice(siblingIndex + 1, 0, edge)
-  return edge
 }
 
 export function orientEdges(nodes, edges, layout = 'both') {

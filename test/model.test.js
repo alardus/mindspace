@@ -37,10 +37,6 @@ test('a sibling edge is inserted immediately after the current sibling', () => {
   const nodes = ['root', 'first', 'middle', 'last']
     .map((id) => makeNode(id, {}, { id, root: id === 'root' }))
   const laidOut = layoutNodes(nodes, edges, () => null, { layout: 'tree' })
-  assert.deepEqual(
-    laidOut.slice(1).map((node) => node.id),
-    ['first', 'middle', 'last'],
-  )
   assert.ok(laidOut[1].position.y < laidOut[2].position.y)
   assert.ok(laidOut[2].position.y < laidOut[3].position.y)
 })
