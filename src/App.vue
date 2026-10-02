@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
   DEFAULT_SIZE,
@@ -8,14 +8,17 @@ import {
   STORAGE_KEY,
   branchColor,
   descendantsOf,
+  highlightParts,
   insertTreeEdgeAfter,
   layoutVerticalGap,
   layoutNodes,
   makeEdge,
   makeNode,
+  nextMatch,
   nodeInDirection,
   normalizeLibrary,
   normalizeMap,
+  normalizeSearch,
   normalizeSettings,
   nodeStyle,
   orientEdges,
@@ -25,6 +28,7 @@ import {
   pluralNodes,
   recolorForPalette,
   relativeTime,
+  searchOrder,
   shiftNodesBelow,
   starterMap,
   toOpml,
@@ -109,7 +113,7 @@ const helpGroups = shortcutGroups()
 const keysLabel = (id) => shortcutKeys(id).join(' ')
 let helpReturnFocus = null
 let copiedTimer
-const { connectionStartHandle, dimensions, getNodes, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
+const { connectionStartHandle, dimensions, getNodes, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
@@ -321,7 +325,7 @@ function notify(message, { duration = 2600, tip = false } = {}) {
 function applyVisibility() {
   const hidden = new Set()
   for (const node of nodes.value) {
-    if (node.data.collapsed) descendantsOf(node.id, edges.value).forEach((id) => hidden.add(id))
+    if (node.data.collapsed && !searchExpanded.has(node.id)) descendantsOf(node.id, edges.value).forEach((id) => hidden.add(id))
   }
   for (const node of nodes.value) node.hidden = hidden.has(node.id)
   for (const edge of edges.value) edge.hidden = hidden.has(edge.source) || hidden.has(edge.target)
@@ -332,6 +336,9 @@ function selectOnly(id) {
 }
 
 function focusEditor(id, initialText = null) {
+  for (const ancestor of ancestorsOf(id)) {
+    if (searchExpanded.delete(ancestor)) nodesById.value.get(ancestor).data.collapsed = false
+  }
   editingId.value = id
   const node = nodes.value.find((item) => item.id === id)
   editDraft.value = { label: initialText ?? node?.data.label ?? '', note: node?.data.note ?? '' }
@@ -532,13 +539,22 @@ function hiddenCount(id) {
 
 // Which side of the node its descendants are on: the collapse button goes there.
 function childrenSide(id, data) {
-  const child = edges.value.find((edge) => edge.source === id && edge.data?.kind === 'tree')
-  const side = child ? nodesById.value.get(child.target)?.data.side : data.side
+  const child = firstChild.value.get(id)
+  const side = child ? nodesById.value.get(child)?.data.side : data.side
   return side === 'left' ? 'left' : 'right'
 }
 
+// One pass over edges instead of a scan per rendered node: big maps re-render thousands of nodes at once.
+const firstChild = computed(() => {
+  const result = new Map()
+  for (const edge of edges.value) {
+    if (edge.data?.kind === 'tree' && !result.has(edge.source)) result.set(edge.source, edge.target)
+  }
+  return result
+})
+
 function hasChildren(id) {
-  return edges.value.some((edge) => edge.source === id && edge.data?.kind === 'tree')
+  return firstChild.value.has(id)
 }
 
 function setColor(color) {
@@ -647,6 +663,197 @@ function navigateNodes(key) {
   selectOnly(target.id)
   nextTick(() => ensureNodeVisible(target.id))
 }
+
+// Map search (5a). Lives outside the map: not saved, not in undo history.
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchTerm = ref('')
+const searchCurrentId = ref(null)
+const searchInput = ref(null)
+const searchBar = ref(null)
+const documentIsland = ref(null)
+const topRight = ref(null)
+const searchPlacement = ref({ top: 12, width: 440 })
+// Collapsed branches temporarily opened to show the current match.
+let searchExpanded = new Set()
+let searchAnchorId = null
+let searchedTerm = ''
+let searchTimer
+// Camera target while a reveal is still animating: quick steps build on it, not on a mid-flight viewport.
+let revealCamera = null
+let revealUntil = 0
+const easeOut = (t) => 1 - (1 - t) ** 3
+
+const searchIndex = computed(() => new Map(nodes.value.map((node) => [node.id, normalizeSearch(`${node.data.label}\n${node.data.note}`)])))
+const searchMatches = computed(() => {
+  const term = searchTerm.value
+  if (!searchOpen.value || !term) return []
+  return searchOrder(nodes.value, edges.value).filter((id) => searchIndex.value.get(id)?.includes(term))
+})
+// Matches and every node above them: lines along these paths stay bright.
+const searchPath = computed(() => {
+  const path = new Set()
+  for (const id of searchMatches.value) ancestorsOf(id).forEach((ancestor) => path.add(ancestor))
+  searchMatches.value.forEach((id) => path.add(id))
+  return path
+})
+const searchCount = computed(() => (searchMatches.value.length
+  ? `${searchMatches.value.indexOf(searchCurrentId.value) + 1} of ${searchMatches.value.length}`
+  : 'No matches'))
+
+function ancestorsOf(id) {
+  const result = []
+  for (let parent = parentOf.value.get(id); parent && !result.includes(parent); parent = parentOf.value.get(parent)) result.push(parent)
+  return result
+}
+
+// Per-node search state: 'path' | 'match' | 'current'. A reactive Map tracks each id separately,
+// so a step re-renders only the nodes that changed, not all of them.
+const searchMarks = reactive(new Map())
+watch([searchPath, searchCurrentId, searchTerm], () => {
+  const next = new Map([...searchPath.value].map((id) => [id, 'path']))
+  searchMatches.value.forEach((id) => next.set(id, 'match'))
+  if (next.has(searchCurrentId.value)) next.set(searchCurrentId.value, 'current')
+  for (const id of [...searchMarks.keys()]) if (!next.has(id)) searchMarks.delete(id)
+  const term = searchTerm.value
+  for (const [id, state] of next) {
+    const old = searchMarks.get(id)
+    if (old?.state !== state || old.term !== term) searchMarks.set(id, { state, term })
+  }
+})
+const searchState = (id) => searchMarks.get(id)?.state
+const searchParts = (id, text) => {
+  const mark = searchMarks.get(id)
+  return mark && mark.state !== 'path' ? highlightParts(text, mark.term) : [{ text, match: false }]
+}
+
+// Centered over the visible canvas; if it would run into the side islands, it moves below the toolbar.
+function placeSearch() {
+  const visible = window.innerWidth - (inspectorOpen.value ? INSPECTOR_SPACE : 0)
+  const side = Math.max(documentIsland.value?.offsetWidth ?? 0, topRight.value?.offsetWidth ?? 0) + 12
+  const available = visible - 2 * (side + 24)
+  searchPlacement.value = available >= 280 ? { top: 12, width: Math.min(440, available) } : { top: 64, width: Math.min(440, visible - 48) }
+}
+
+function openSearch() {
+  closeMenus()
+  if (!searchOpen.value) {
+    searchOpen.value = true
+    searchAnchorId = primaryNode.value?.id ?? null
+    searchedTerm = null
+    placeSearch()
+  }
+  nextTick(() => searchInput.value?.select())
+}
+
+// Selecting is deferred to here: a selection change costs a deep pass over the map (autosave watcher), too slow per step on big maps.
+function closeSearch() {
+  if (!searchOpen.value) return
+  searchOpen.value = false
+  if (searchCurrentId.value) selectOnly(searchCurrentId.value)
+  searchCurrentId.value = null
+  searchExpanded = new Set()
+  applyVisibility()
+  if (document.activeElement?.closest?.('.search-island, .search-toggle')) document.activeElement.blur()
+}
+
+function flushSearch() {
+  clearTimeout(searchTimer)
+  searchTerm.value = normalizeSearch(searchQuery.value.trim())
+}
+
+function setSearchCurrent(id) {
+  searchCurrentId.value = id
+  if (!id) return
+  searchExpanded = new Set(ancestorsOf(id).filter((ancestor) => nodesById.value.get(ancestor)?.data.collapsed))
+  applyVisibility()
+  revealSearchMatch(id)
+}
+
+function stepSearch(step) {
+  flushSearch()
+  const list = searchMatches.value
+  if (!list.length) return
+  const index = list.indexOf(searchCurrentId.value)
+  setSearchCurrent(list[index < 0 ? (step > 0 ? 0 : list.length - 1) : (index + step + list.length) % list.length])
+}
+
+// Keeps the match 80px inside the visible canvas, clear of the islands and the panel. Zoom changes only for unreadably small nodes.
+// Works from model coordinates: a node just shown from a collapsed branch has no settled DOM position yet.
+function revealSearchMatch(id) {
+  const node = nodesById.value.get(id)
+  const { width: canvasWidth, height: canvasHeight } = dimensions.value
+  if (!node || !canvasWidth) return
+  const width = node.dimensions?.width || DEFAULT_SIZE.width
+  const height = node.dimensions?.height || DEFAULT_SIZE.height
+  const transition = { duration: 250, ease: easeOut, interpolate: 'linear' }
+  const { x: viewX, y: viewY, zoom } = performance.now() < revealUntil ? revealCamera : viewport.value
+  if (height * zoom < 10) {
+    revealUntil = 0
+    setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, ...transition })
+    return
+  }
+  const margin = 80
+  const left = margin
+  const right = canvasWidth - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
+  const top = Math.max(margin, (searchBar.value?.offsetTop ?? 0) + (searchBar.value?.offsetHeight ?? 0) + 24)
+  const bottom = canvasHeight - margin
+  const box = { left: node.position.x * zoom + viewX, top: node.position.y * zoom + viewY }
+  box.right = box.left + width * zoom
+  box.bottom = box.top + height * zoom
+  const shift = (low, high, from, to) => (to - from > high - low ? low - from : from < low ? low - from : to > high ? high - to : 0)
+  const dx = shift(left, right, box.left, box.right)
+  const dy = shift(top, bottom, box.top, box.bottom)
+  if (!dx && !dy) return
+  revealCamera = { x: viewX + dx, y: viewY + dy, zoom }
+  revealUntil = performance.now() + transition.duration
+  setViewport(revealCamera, transition)
+}
+
+function onSearchKeydown(event) {
+  const mod = event.metaKey || event.ctrlKey
+  if (event.key === 'Enter' && mod) {
+    const id = searchCurrentId.value
+    if (id) focusEditor(id)
+    closeSearch()
+  } else if ((event.key === 'Enter' && event.shiftKey) || event.key === 'ArrowUp') stepSearch(-1)
+  else if (event.key === 'Enter' || event.key === 'ArrowDown') stepSearch(1)
+  else if (event.key === 'Escape') closeSearch()
+  else if (event.key === 'Tab') event.target.blur()
+  else if (mod && (event.key.toLowerCase() === 'f' || event.code === 'KeyF')) event.target.select()
+  else return
+  event.preventDefault()
+}
+
+watch(searchQuery, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(flushSearch, 80)
+})
+
+// New query: start after the anchor node. Edits: keep the current match while it still matches.
+watch(searchMatches, (list) => {
+  if (!searchOpen.value) return
+  const termChanged = searchTerm.value !== searchedTerm
+  searchedTerm = searchTerm.value
+  if (!termChanged && list.includes(searchCurrentId.value)) return
+  const order = searchOrder(nodes.value, edges.value)
+  setSearchCurrent(nextMatch(order, list, termChanged ? searchAnchorId : searchCurrentId.value))
+})
+
+// A node picked by the user becomes the new anchor; a matched one becomes current.
+watch(() => primaryNode.value?.id, (id) => {
+  if (!searchOpen.value || !id || id === searchCurrentId.value) return
+  searchAnchorId = id
+  if (searchMatches.value.includes(id)) setSearchCurrent(id)
+})
+
+// The query belongs to its map.
+watch(activeId, () => {
+  closeSearch()
+  searchQuery.value = ''
+  flushSearch()
+})
+watch(inspectorOpen, placeSearch)
 
 function connectNodes(connection) {
   if (!connection.source || !connection.target || connection.source === connection.target) return
@@ -1382,6 +1589,16 @@ function onKeydown(event) {
     }
     return
   }
+  if (shortcut?.id === 'search') {
+    event.preventDefault()
+    openSearch()
+    return
+  }
+  if (event.key === 'Escape' && searchOpen.value && !contextMenu.value && !documentsOpen.value && !appMenuOpen.value && !exportOpen.value) {
+    event.preventDefault()
+    closeSearch()
+    return
+  }
   if (shortcut?.id === 'undo' && deletion.value) {
     event.preventDefault()
     undoDeletion()
@@ -1421,6 +1638,8 @@ function onNodesChange(changes) {
   const dimensionChanges = changes.filter((change) => change.type === 'dimensions')
   if (!dimensionChanges.length) return
   const revealId = dimensionChanges.some((change) => change.id === pendingRevealId) ? pendingRevealId : null
+  // A match shown from a collapsed branch gets its real size only now.
+  const searchId = dimensionChanges.some((change) => change.id === searchCurrentId.value) ? searchCurrentId.value : null
   for (const change of dimensionChanges) {
     const node = nodes.value.find((item) => item.id === change.id)
     const height = change.dimensions?.height ?? node?.dimensions?.height
@@ -1433,6 +1652,7 @@ function onNodesChange(changes) {
   }
   if (!autoLayout.value && !pendingLayout && !pendingFocus) {
     if (revealId) revealAfterMeasurement(revealId)
+    if (searchId) revealSearchMatch(searchId)
     return
   }
   cancelAnimationFrame(layoutFrame)
@@ -1445,6 +1665,7 @@ function onNodesChange(changes) {
     }
     flushFocus()
     if (revealId) revealAfterMeasurement(revealId)
+    if (searchId) revealSearchMatch(searchId)
   })
 }
 
@@ -1476,6 +1697,7 @@ onMounted(() => {
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('pagehide', persistDocuments)
+  window.addEventListener('resize', placeSearch)
   clockTimer = setInterval(() => (now.value = Date.now()), 60000)
   showShortcutsTip()
 })
@@ -1494,6 +1716,7 @@ function showShortcutsTip() {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('pagehide', persistDocuments)
+  window.removeEventListener('resize', placeSearch)
   persistDocuments(false)
   clearTimeout(saveTimer)
   clearTimeout(toastTimer)
@@ -1507,7 +1730,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle }">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -1539,7 +1762,9 @@ onBeforeUnmount(() => {
           @pane-click="closeOverlays"
         >
           <template #edge-branch="edge">
-            <BaseEdge :id="edge.id" :path="branchPath(edge)" :style="edge.style" :interaction-width="12" />
+            <g class="branch-edge" :class="{ 'search-path': searchMarks.has(edge.target) }">
+              <BaseEdge :id="edge.id" :path="branchPath(edge)" :style="edge.style" :interaction-width="12" />
+            </g>
           </template>
 
           <template #node-mind="{ id, data, selected }">
@@ -1553,6 +1778,8 @@ onBeforeUnmount(() => {
                 editing: editingId === id,
                 collapsed: data.collapsed,
                 'drop-target': dropTargetId === id,
+                'search-match': searchState(id) === 'match' || searchState(id) === 'current',
+                'search-current': searchState(id) === 'current',
               }]"
               :style="{ '--branch': data.color }"
               :aria-current="selected ? 'true' : undefined"
@@ -1592,8 +1819,8 @@ onBeforeUnmount(() => {
                 />
               </div>
               <template v-else>
-                <span class="node-title">{{ data.label }}</span>
-                <span v-if="data.note" class="node-note">{{ data.note }}</span>
+                <span class="node-title"><template v-for="(part, index) in searchParts(id, data.label)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="data.note" class="node-note"><template v-for="(part, index) in searchParts(id, data.note)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
               </template>
               <button
                 v-if="hasChildren(id)"
@@ -1612,7 +1839,7 @@ onBeforeUnmount(() => {
           </template>
         </VueFlow>
 
-        <div class="island document-island" @click.stop>
+        <div ref="documentIsland" class="island document-island" @click.stop>
           <button
             ref="brandButton"
             class="brand-mark"
@@ -1781,8 +2008,52 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="top-right" @click.stop>
+        <Transition name="search">
+          <div
+            v-if="searchOpen"
+            ref="searchBar"
+            class="island search-island"
+            role="search"
+            :style="{ top: `${searchPlacement.top}px`, width: `${searchPlacement.width}px` }"
+            @click.stop
+          >
+            <svg class="search-icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+            <input
+              ref="searchInput"
+              v-model="searchQuery"
+              name="map-search"
+              placeholder="Find on map"
+              aria-label="Find on map"
+              autocomplete="off"
+              @keydown="onSearchKeydown"
+            />
+            <span v-if="searchTerm" class="search-count" :class="{ empty: !searchMatches.length }" aria-live="polite">{{ searchCount }}</span>
+            <button class="search-button" :disabled="!searchMatches.length" :title="`Previous · ${keyLabel('Shift')} Enter`" aria-label="Previous match" @click="stepSearch(-1)">
+              <svg viewBox="0 0 16 16"><path d="M4 10l4-4 4 4"/></svg>
+            </button>
+            <button class="search-button" :disabled="!searchMatches.length" title="Next · Enter" aria-label="Next match" @click="stepSearch(1)">
+              <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
+            </button>
+            <span class="divider"></span>
+            <button class="search-button" title="Close · Esc" aria-label="Close search" @click="closeSearch">
+              <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+            </button>
+          </div>
+        </Transition>
+
+        <div ref="topRight" class="top-right" @click.stop>
           <div class="island action-island">
+            <button
+              class="island-icon search-toggle"
+              :class="{ active: searchOpen }"
+              :aria-pressed="searchOpen"
+              :title="`Search · ${keysLabel('search')}`"
+              aria-label="Search"
+              @click="searchOpen ? closeSearch() : openSearch()"
+            >
+              <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+            </button>
+            <span class="divider"></span>
             <button class="island-icon" :disabled="!history.length" :title="`Undo (${keysLabel('undo')})`" aria-label="Undo" @click="undo">
               <svg viewBox="0 0 16 16"><path d="M5.5 4L2.5 7l3 3"/><path d="M2.5 7h7a4 4 0 010 8H8"/></svg>
             </button>

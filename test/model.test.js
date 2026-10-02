@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { COLORS, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
+import { COLORS, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
 
 test('tree helpers keep descendants and layout predictable', () => {
   const root = makeNode('root', {}, { id: 'root', root: true })
@@ -240,4 +240,28 @@ test('starter map is an English tour that survives a save round-trip', () => {
   const reopened = normalizeMap(JSON.parse(JSON.stringify(map)))
   assert.equal(reopened.nodes.length, map.nodes.length)
   assert.equal(reopened.edges.length, map.edges.length)
+})
+
+test('map search order, wrap-around and highlighting', () => {
+  const lower = makeNode('Ёлка', { x: 0, y: 300 }, { id: 'lower', root: true })
+  const upper = makeNode('upper', { x: 0, y: 0 }, { id: 'upper', root: true })
+  const bottomKid = makeNode('елка', { x: 200, y: 50 }, { id: 'bottom-kid' })
+  const topKid = makeNode('kid', { x: 200, y: -50 }, { id: 'top-kid', note: 'ЕЛКА' })
+  const edges = [makeEdge('upper', 'bottom-kid'), makeEdge('upper', 'top-kid')]
+  const order = searchOrder([lower, upper, bottomKid, topKid], edges)
+  assert.deepEqual(order, ['upper', 'top-kid', 'bottom-kid', 'lower'])
+
+  assert.equal(normalizeSearch('ЁЛКА'), 'елка')
+  const matches = ['top-kid', 'bottom-kid', 'lower']
+  assert.equal(nextMatch(order, matches, 'upper'), 'top-kid')
+  assert.equal(nextMatch(order, matches, 'top-kid'), 'bottom-kid')
+  assert.equal(nextMatch(order, matches, 'lower'), 'top-kid')
+  assert.equal(nextMatch(order, matches, null), 'top-kid')
+  assert.equal(nextMatch(order, [], 'upper'), null)
+
+  assert.deepEqual(highlightParts('Ёлка и ёлка', 'елка'), [
+    { text: 'Ёлка', match: true }, { text: ' и ', match: false }, { text: 'ёлка', match: true },
+  ])
+  assert.deepEqual(highlightParts('aaa', 'a').length, 3)
+  assert.ok(highlightParts('abc', 'b').every((part) => part.text))
 })

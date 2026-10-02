@@ -131,6 +131,20 @@ button { color: inherit; }
 .island-icon:not(:disabled):hover { background: #f3f2ee; }
 .island-icon svg { width: 16px; height: 16px; stroke-width: 1.7; }
 .divider { width: 1px; height: 20px; margin: 0 4px; background: #e7e6e0; }
+.island-icon.active, .island-icon.active:hover { background: #EFEEE9; }
+
+/* Map search (5a) */
+.search-island { position: absolute; transition: left .2s ease; left: 50%; z-index: 20; gap: 2px; padding: 0 6px 0 12px; border-color: #1F2421; box-shadow: 0 8px 24px rgba(30, 32, 28, .10); transform: translateX(-50%); }
+.search-icon { flex: none; width: 15px; height: 15px; color: #6B6F6A; stroke-width: 1.7; }
+.search-island input { flex: 1; min-width: 0; height: 100%; padding: 0 8px; color: var(--ink); background: transparent; border: 0; outline: none; font-size: 14px; }
+.search-island input::placeholder { color: #9a9d95; }
+.search-count { flex: none; margin-right: 4px; color: #6B6F6A; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.search-count.empty { color: #B2412E; }
+.search-button { flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: var(--ink); background: transparent; border-radius: 7px; }
+.search-button:not(:disabled):hover { background: #F3F2EE; }
+.search-button svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.search-enter-active, .search-leave-active { transition: opacity .15s ease, transform .15s ease; }
+.search-enter-from, .search-leave-to { opacity: 0; transform: translate(-50%, -4px); }
 .export-wrap { position: relative; }
 .export-button { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; color: #fff; background: #1f2421; border-radius: 8px; font-size: 14px; font-weight: 600; }
 .export-button:hover, .export-button[aria-expanded="true"] { background: #33392f; }
@@ -147,7 +161,7 @@ button { color: inherit; }
 .workspace.inspector-open .top-right, .workspace.inspector-open .zoom-controls { right: 344px; }
 /* Notifications center on the visible part of the canvas, not under the panel. */
 .toast { transition: left .2s ease; }
-.workspace.inspector-open .toast { left: calc((100% - 344px) / 2); }
+.workspace.inspector-open .toast, .workspace.inspector-open .search-island { left: calc((100% - 344px) / 2); }
 .canvas-wrap { position: relative; min-width: 0; overflow: hidden; background: var(--canvas); }
 .canvas-wrap::before { content: ''; position: absolute; inset: 0; background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px); background-size: 20px 20px; pointer-events: none; }
 .mind-flow { position: relative; width: 100%; height: 100%; }
@@ -324,3 +338,11 @@ button { color: inherit; }
 .mind-node.style-card:not(.root) .collapse-button, .mind-node.style-text:not(.root) .collapse-button { top: 50%; bottom: auto; }
 .mind-node.kids-right.style-card .collapse-button, .mind-node.kids-right.style-text .collapse-button { transform: translate(50%, -50%); }
 .mind-node.kids-left.style-card .collapse-button, .mind-node.kids-left.style-text .collapse-button { transform: translate(-50%, -50%); }
+
+/* Map search on the canvas: matches marked, everything else dimmed except the paths down to matches. */
+.mind-node mark { padding: 0 1px; color: inherit; background: #FBE7A1; border-radius: 3px; }
+.node-note mark { color: var(--ink); }
+.mind-node.search-current mark { background: #F2C94C; }
+.mind-node.search-current { background: #FFF8E1 !important; }
+.mind-node, .branch-edge, .vue-flow__edge.relation-edge { transition: opacity .15s, background .15s; }
+.canvas-wrap.searching .mind-node:not(.search-match), .canvas-wrap.searching .branch-edge:not(.search-path), .canvas-wrap.searching .vue-flow__edge.relation-edge { opacity: .28; }

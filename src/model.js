@@ -485,3 +485,53 @@ export function starterMap() {
   map.nodes = layoutNodes(map.nodes, map.edges)
   return map
 }
+
+// Map search: case-insensitive, ё matches е. Both keep string length, so match offsets map back to the original text.
+export const normalizeSearch = (text) => text.toLowerCase().replaceAll('ё', 'е')
+
+// Depth-first in visual order: roots top to bottom (then left to right), children top to bottom.
+export function searchOrder(nodes, edges) {
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const children = new Map()
+  const hasParent = new Set()
+  for (const edge of edges) {
+    if (edge.data?.kind !== 'tree' || !byId.has(edge.source) || !byId.has(edge.target)) continue
+    if (!children.has(edge.source)) children.set(edge.source, [])
+    children.get(edge.source).push(byId.get(edge.target))
+    hasParent.add(edge.target)
+  }
+  const visual = (a, b) => a.position.y - b.position.y || a.position.x - b.position.x
+  const order = []
+  const seen = new Set()
+  const visit = (node) => {
+    if (seen.has(node.id)) return
+    seen.add(node.id)
+    order.push(node.id)
+    ;[...(children.get(node.id) ?? [])].sort(visual).forEach(visit)
+  }
+  nodes.filter((node) => !hasParent.has(node.id)).sort(visual).forEach(visit)
+  nodes.forEach(visit)
+  return order
+}
+
+// The first match after anchorId in search order, wrapping around.
+export function nextMatch(order, matches, anchorId) {
+  const index = order.indexOf(anchorId)
+  const position = new Map(order.map((id, at) => [id, at]))
+  return matches.find((id) => position.get(id) > index) ?? matches[0] ?? null
+}
+
+// Splits text into plain and matched parts; no empty parts.
+export function highlightParts(text, term) {
+  const haystack = normalizeSearch(text)
+  if (!term || haystack.length !== text.length) return [{ text, match: false }]
+  const parts = []
+  let from = 0
+  for (let at = haystack.indexOf(term); at >= 0; at = haystack.indexOf(term, from)) {
+    if (at > from) parts.push({ text: text.slice(from, at), match: false })
+    from = at + term.length
+    parts.push({ text: text.slice(at, from), match: true })
+  }
+  if (from < text.length) parts.push({ text: text.slice(from), match: false })
+  return parts
+}
