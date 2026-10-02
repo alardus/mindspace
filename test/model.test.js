@@ -262,6 +262,6 @@ test('map search order, wrap-around and highlighting', () => {
   assert.deepEqual(highlightParts('Ёлка и ёлка', 'елка'), [
     { text: 'Ёлка', match: true }, { text: ' и ', match: false }, { text: 'ёлка', match: true },
   ])
-  assert.deepEqual(highlightParts('aaa', 'a').length, 3)
+  assert.equal(highlightParts('aaa', 'a').length, 3)
   assert.ok(highlightParts('abc', 'b').every((part) => part.text))
 })

@@ -117,6 +117,7 @@ const { connectionStartHandle, dimensions, getNodes, setCenter, setViewport, vie
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
+const easeOut = (t) => 1 - (1 - t) ** 3
 const canvasElement = ref(null)
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
@@ -417,7 +418,7 @@ function relayout(remember = true, fit = false, animate = false, anchorId = prim
     const start = performance.now()
     const step = (time) => {
       const t = Math.min(1, (time - start) / 250)
-      const ease = 1 - (1 - t) ** 3
+      const ease = easeOut(t)
       for (const { node, from, to } of moves) {
         node.position = { x: from.x + (to.x - from.x) * ease, y: from.y + (to.y - from.y) * ease }
       }
@@ -620,6 +621,9 @@ function clearSelection() {
   for (const node of nodes.value) node.selected = false
 }
 
+// How far to move a [from, to] span into [low, high]; a span too big to fit aligns to low.
+const shiftInto = (low, high, from, to) => (to - from > high - low || from < low ? low - from : to > high ? high - to : 0)
+
 function ensureNodeVisible(id) {
   const element = document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)
   const canvas = canvasElement.value
@@ -631,12 +635,8 @@ function ensureNodeVisible(id) {
   const right = canvasBounds.right - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
   const top = canvasBounds.top + margin
   const bottom = canvasBounds.bottom - margin
-  const x = bounds.width > right - left
-    ? left - bounds.left
-    : bounds.left < left ? left - bounds.left : bounds.right > right ? right - bounds.right : 0
-  const y = bounds.height > bottom - top
-    ? top - bounds.top
-    : bounds.top < top ? top - bounds.top : bounds.bottom > bottom ? bottom - bounds.bottom : 0
+  const x = shiftInto(left, right, bounds.left, bounds.right)
+  const y = shiftInto(top, bottom, bounds.top, bounds.bottom)
   if (x || y) {
     setViewport({ x: viewport.value.x + x, y: viewport.value.y + y, zoom: viewport.value.zoom }, { duration: 180 })
   }
@@ -670,7 +670,6 @@ const searchQuery = ref('')
 const searchTerm = ref('')
 const searchCurrentId = ref(null)
 const searchInput = ref(null)
-const searchBar = ref(null)
 const documentIsland = ref(null)
 const topRight = ref(null)
 const searchPlacement = ref({ top: 12, width: 440 })
@@ -682,13 +681,13 @@ let searchTimer
 // Camera target while a reveal is still animating: quick steps build on it, not on a mid-flight viewport.
 let revealCamera = null
 let revealUntil = 0
-const easeOut = (t) => 1 - (1 - t) ** 3
 
 const searchIndex = computed(() => new Map(nodes.value.map((node) => [node.id, normalizeSearch(`${node.data.label}\n${node.data.note}`)])))
+const searchOrderIds = computed(() => searchOrder(nodes.value, edges.value))
 const searchMatches = computed(() => {
   const term = searchTerm.value
   if (!searchOpen.value || !term) return []
-  return searchOrder(nodes.value, edges.value).filter((id) => searchIndex.value.get(id)?.includes(term))
+  return searchOrderIds.value.filter((id) => searchIndex.value.get(id)?.includes(term))
 })
 // Matches and every node above them: lines along these paths stay bright.
 const searchPath = computed(() => {
@@ -796,14 +795,13 @@ function revealSearchMatch(id) {
   const margin = 80
   const left = margin
   const right = canvasWidth - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
-  const top = Math.max(margin, (searchBar.value?.offsetTop ?? 0) + (searchBar.value?.offsetHeight ?? 0) + 24)
+  const top = Math.max(margin, searchPlacement.value.top + 44 + 24)
   const bottom = canvasHeight - margin
   const box = { left: node.position.x * zoom + viewX, top: node.position.y * zoom + viewY }
   box.right = box.left + width * zoom
   box.bottom = box.top + height * zoom
-  const shift = (low, high, from, to) => (to - from > high - low ? low - from : from < low ? low - from : to > high ? high - to : 0)
-  const dx = shift(left, right, box.left, box.right)
-  const dy = shift(top, bottom, box.top, box.bottom)
+  const dx = shiftInto(left, right, box.left, box.right)
+  const dy = shiftInto(top, bottom, box.top, box.bottom)
   if (!dx && !dy) return
   revealCamera = { x: viewX + dx, y: viewY + dy, zoom }
   revealUntil = performance.now() + transition.duration
@@ -820,7 +818,7 @@ function onSearchKeydown(event) {
   else if (event.key === 'Enter' || event.key === 'ArrowDown') stepSearch(1)
   else if (event.key === 'Escape') closeSearch()
   else if (event.key === 'Tab') event.target.blur()
-  else if (mod && (event.key.toLowerCase() === 'f' || event.code === 'KeyF')) event.target.select()
+  else if (findShortcut(event)?.id === 'search') event.target.select()
   else return
   event.preventDefault()
 }
@@ -836,8 +834,7 @@ watch(searchMatches, (list) => {
   const termChanged = searchTerm.value !== searchedTerm
   searchedTerm = searchTerm.value
   if (!termChanged && list.includes(searchCurrentId.value)) return
-  const order = searchOrder(nodes.value, edges.value)
-  setSearchCurrent(nextMatch(order, list, termChanged ? searchAnchorId : searchCurrentId.value))
+  setSearchCurrent(nextMatch(searchOrderIds.value, list, termChanged ? searchAnchorId : searchCurrentId.value))
 })
 
 // A node picked by the user becomes the new anchor; a matched one becomes current.
@@ -2011,7 +2008,6 @@ onBeforeUnmount(() => {
         <Transition name="search">
           <div
             v-if="searchOpen"
-            ref="searchBar"
             class="island search-island"
             role="search"
             :style="{ top: `${searchPlacement.top}px`, width: `${searchPlacement.width}px` }"

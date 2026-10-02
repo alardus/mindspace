@@ -516,9 +516,9 @@ export function searchOrder(nodes, edges) {
 
 // The first match after anchorId in search order, wrapping around.
 export function nextMatch(order, matches, anchorId) {
-  const index = order.indexOf(anchorId)
   const position = new Map(order.map((id, at) => [id, at]))
-  return matches.find((id) => position.get(id) > index) ?? matches[0] ?? null
+  const from = position.get(anchorId) ?? -1
+  return matches.find((id) => position.get(id) > from) ?? matches[0] ?? null
 }
 
 // Splits text into plain and matched parts; no empty parts.
