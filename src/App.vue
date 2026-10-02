@@ -113,6 +113,7 @@ const { connectionStartHandle, dimensions, getNodes, setViewport, viewport, zoom
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
+const canvasElement = ref(null)
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
 function focusMap(duration = 300) {
@@ -137,6 +138,7 @@ let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
 let focusTimer
 const measuredNodeHeights = new Map()
+let pendingRevealId = null
 
 const selectedNodes = computed(() => nodes.value.filter((node) => node.selected && !node.hidden))
 const selectedCount = computed(() => selectedNodes.value.length)
@@ -603,27 +605,37 @@ function clearSelection() {
 }
 
 function ensureNodeVisible(id) {
-  const node = nodes.value.find((item) => item.id === id)
-  if (!node) return
-  const camera = viewport.value
-  const { width, height } = dimensions.value
-  const availableWidth = width - (inspectorOpen.value ? INSPECTOR_SPACE : 0)
+  const element = document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)
+  const canvas = canvasElement.value
+  if (!element || !canvas) return false
+  const bounds = element.getBoundingClientRect()
+  const canvasBounds = canvas.getBoundingClientRect()
   const margin = 32
-  const left = node.position.x * camera.zoom + camera.x
-  const top = node.position.y * camera.zoom + camera.y
-  const right = left + (node.dimensions?.width || 180) * camera.zoom
-  const bottom = top + (node.dimensions?.height || 30) * camera.zoom
-  let x = camera.x
-  let y = camera.y
-  if (left < margin) x += margin - left
-  else if (right > availableWidth - margin) x -= right - (availableWidth - margin)
-  if (top < margin) y += margin - top
-  else if (bottom > height - margin) y -= bottom - (height - margin)
-  if (x !== camera.x || y !== camera.y) setViewport({ x, y, zoom: camera.zoom }, { duration: 180 })
+  const left = canvasBounds.left + margin
+  const right = canvasBounds.right - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
+  const top = canvasBounds.top + margin
+  const bottom = canvasBounds.bottom - margin
+  const x = bounds.width > right - left
+    ? left - bounds.left
+    : bounds.left < left ? left - bounds.left : bounds.right > right ? right - bounds.right : 0
+  const y = bounds.height > bottom - top
+    ? top - bounds.top
+    : bounds.top < top ? top - bounds.top : bounds.bottom > bottom ? bottom - bounds.bottom : 0
+  if (x || y) {
+    setViewport({ x: viewport.value.x + x, y: viewport.value.y + y, zoom: viewport.value.zoom }, { duration: 180 })
+  }
+  return true
 }
 
 function revealNode(id) {
-  nextTick(() => requestAnimationFrame(() => ensureNodeVisible(id)))
+  pendingRevealId = id
+}
+
+function revealAfterMeasurement(id) {
+  nextTick(() => requestAnimationFrame(() => {
+    if (pendingRevealId !== id) return
+    if (ensureNodeVisible(id)) pendingRevealId = null
+  }))
 }
 
 function navigateNodes(key) {
@@ -1408,6 +1420,7 @@ function flushFocus() {
 function onNodesChange(changes) {
   const dimensionChanges = changes.filter((change) => change.type === 'dimensions')
   if (!dimensionChanges.length) return
+  const revealId = dimensionChanges.some((change) => change.id === pendingRevealId) ? pendingRevealId : null
   for (const change of dimensionChanges) {
     const node = nodes.value.find((item) => item.id === change.id)
     const height = change.dimensions?.height ?? node?.dimensions?.height
@@ -1418,7 +1431,10 @@ function onNodesChange(changes) {
       shiftNodesBelow(nodes.value, node.position.y + previousHeight, height - previousHeight, new Set([node.id]))
     }
   }
-  if (!autoLayout.value && !pendingLayout && !pendingFocus) return
+  if (!autoLayout.value && !pendingLayout && !pendingFocus) {
+    if (revealId) revealAfterMeasurement(revealId)
+    return
+  }
   cancelAnimationFrame(layoutFrame)
   layoutFrame = requestAnimationFrame(() => {
     if (dragStart) return
@@ -1428,6 +1444,7 @@ function onNodesChange(changes) {
       relayout(false, fit)
     }
     flushFocus()
+    if (revealId) revealAfterMeasurement(revealId)
   })
 }
 
@@ -1490,7 +1507,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section class="canvas-wrap" :class="{ linking: connectionStartHandle }">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle }">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -1528,6 +1545,7 @@ onBeforeUnmount(() => {
           <template #node-mind="{ id, data, selected }">
             <div
               class="mind-node"
+              :data-mind-node="id"
               :class="[`style-${nodeStyle(data)}`, `side-${data.side}`, `kids-${childrenSide(id, data)}`, {
                 selected,
                 root: data.root,
