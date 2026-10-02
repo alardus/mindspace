@@ -148,6 +148,7 @@ button { color: inherit; }
 .export-wrap { position: relative; }
 .export-button { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; color: #fff; background: #1f2421; border-radius: 8px; font-size: 14px; font-weight: 600; }
 .export-button:hover, .export-button[aria-expanded="true"] { background: #33392f; }
+.export-button:disabled { opacity: .65; cursor: wait; }
 .export-button svg { width: 13px; height: 13px; stroke-width: 2; }
 .export-menu { top: 44px; right: -6px; width: 220px; }
 .inspector-toggle { justify-content: center; width: 44px; padding: 0; color: #1f2421; cursor: pointer; }
@@ -193,6 +194,8 @@ button { color: inherit; }
 .panel-input.title-input { font-size: 14px; font-weight: 500; }
 .panel-input.note-input { color: #55594F; font-size: 13px; font-variant-numeric: tabular-nums; }
 .panel-input::placeholder { color: #9a9d95; }
+.panel-image-remove { align-self: flex-start; height: 30px; padding: 0 10px; color: #B2412E; background: transparent; border: 1px solid #E7E6E0; border-radius: 7px; cursor: pointer; font-size: 13px; }
+.panel-image-remove:hover { background: #FBEFEC; }
 
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
 .swatches button { width: 28px; height: 28px; padding: 0; background: var(--swatch); border: 0; border-radius: 50%; cursor: pointer; }
@@ -233,6 +236,7 @@ button { color: inherit; }
 .mind-node:hover { background: rgba(31, 36, 33, .04); }
 .mind-node.selected, .mind-node.editing { background: var(--selected); box-shadow: 0 0 0 3px color-mix(in srgb, var(--branch) 24%, transparent); }
 .mind-node.drop-target { background: var(--selected); }
+.mind-node.merge-target { box-shadow: 0 0 0 4px color-mix(in srgb, var(--branch) 45%, transparent); }
 /* Preview line to the node the dragged block will attach to. */
 .attach-preview { position: absolute; inset: 0; z-index: 4; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .attach-preview path { fill: none; stroke-width: 2; stroke-linecap: round; }
@@ -254,6 +258,16 @@ button { color: inherit; }
 .mind-node.root.style-card:hover { background: #fff; border-color: #d3d2ca; }
 .mind-node.root.style-card.selected, .mind-node.root.style-card.editing { background: #fff; border-color: var(--branch); box-shadow: 0 0 0 3px color-mix(in srgb, var(--branch) 22%, transparent), 0 2px 8px rgba(30, 32, 28, .06); }
 .mind-node.root.style-line { padding: 0 8px 8px; }
+
+/* Image content keeps its original aspect ratio; tree nodes use the normal compact footprint. */
+.node-image { display: block; object-fit: contain; border-radius: 6px; user-select: none; }
+.mind-node.image-only { min-width: 0; max-width: none; padding: 6px; background: #fff; border: 1px solid #E7E6E0; border-bottom: 2px solid var(--branch); border-radius: 10px; }
+.mind-node.image-only:hover { background: #fff; border-color: var(--branch); }
+.mind-node.image-only.root { min-width: 0; max-width: none; padding: 6px; }
+.mind-node.image-only.root .node-image { max-width: 360px; max-height: 280px; }
+.mind-node.image-only:not(.root) .node-image { max-width: 180px; max-height: 140px; }
+.mind-node:not(.image-only) > .node-image { width: 100%; max-height: 180px; margin-bottom: 5px; }
+.image-placeholder { display: grid; place-items: center; width: 160px; height: 100px; padding: 12px; overflow: hidden; color: var(--muted); background: #EFEEE9; border-radius: 6px; font-size: 12px; overflow-wrap: anywhere; }
 
 .node-editor { display: flex; flex-direction: column; gap: 1px; width: 240px; }
 .root .node-editor { align-items: center; }
@@ -287,6 +301,8 @@ button { color: inherit; }
 .mind-node .vue-flow__handle-right { left: auto; right: 0; top: 50%; bottom: auto; transform: translateY(-50%); }
 /* bottom is measured from the inner border edge: −5px puts the handle center in the middle of the 2px line. */
 .mind-node.style-line:not(.root) .vue-flow__handle-left, .mind-node.style-line:not(.root) .vue-flow__handle-right { top: auto; bottom: -5px; transform: none; }
+.mind-node.image-only.style-line:not(.root) .vue-flow__handle-left, .mind-node.image-only.style-line:not(.root) .vue-flow__handle-right { top: 50%; bottom: auto; transform: translateY(-50%); }
+.mind-node.image-only:not(.root) .collapse-button { top: 50%; bottom: auto; }
 /* Tree: the connector leaves downward from the parent's left edge. */
 .mind-node .tree-handle { top: auto; right: auto; bottom: -1px; left: 10px; transform: none; opacity: 0; pointer-events: none; }
 .mind-node.root .tree-handle { left: 20px; }
@@ -329,6 +345,11 @@ button { color: inherit; }
 .undo-toast button:hover, .undo-toast button:focus-visible { background: rgba(255, 255, 255, .12); outline: none; }
 .toast-enter-active, .toast-leave-active { transition: .2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 8px); }
+.image-preview { max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 36px 12px 12px; background: #1F2421; border: 0; border-radius: 12px; box-shadow: 0 24px 80px #0008; }
+.image-preview::backdrop { background: #1F2421aa; }
+.image-preview img { display: block; max-width: calc(100vw - 72px); max-height: calc(100vh - 96px); object-fit: contain; }
+.image-preview-close { position: absolute; top: 6px; right: 8px; width: 28px; height: 28px; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 22px; line-height: 1; }
+.image-preview-close:hover, .image-preview-close:focus-visible { background: #ffffff20; outline: none; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 @media (max-width: 1100px) {

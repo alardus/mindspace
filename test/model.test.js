@@ -1,6 +1,106 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import * as mapModel from '../src/model.js'
 import { COLORS, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
+
+const image = {
+  assetId: 'asset-1',
+  name: 'diagram.png',
+  mime: 'image/png',
+  naturalWidth: 1200,
+  naturalHeight: 800,
+}
+
+test('image-only nodes survive a version 3 round-trip', () => {
+  const map = normalizeMap({
+    version: 3,
+    nodes: [makeNode('', {}, { id: 'image', image })],
+    edges: [],
+  })
+
+  assert.equal(map.version, 3)
+  assert.deepEqual(map.nodes[0].data.image, image)
+  assert.equal(map.needsLayout, undefined)
+  assert.deepEqual([...mapModel.referencedAssetIds?.(map) ?? []], ['asset-1'])
+})
+
+test('image references are validated without changing text nodes', () => {
+  const map = normalizeMap({
+    version: 3,
+    nodes: [
+      { id: 'valid', data: { label: 'Diagram', image } },
+      { id: 'invalid', data: { label: 'Text stays', image: { ...image, mime: 'image/svg+xml' } } },
+    ],
+    edges: [],
+  })
+
+  assert.deepEqual(map.nodes[0].data.image, image)
+  assert.equal(map.nodes[1].data.image, undefined)
+  assert.equal(map.nodes[1].data.label, 'Text stays')
+})
+
+test('empty version 3 blocks are rejected while legacy labels still migrate', () => {
+  assert.throws(() => normalizeMap({ version: 3, nodes: [{ id: 'empty', data: { label: '' } }], edges: [] }), /empty block/i)
+  const legacy = normalizeMap({ version: 2, nodes: [{ id: 'legacy', data: {} }], edges: [] })
+  assert.equal(legacy.nodes[0].data.label, 'Idea 1')
+})
+
+test('merge image node into text while preserving its children', () => {
+  const parent = makeNode('Parent', {}, { id: 'parent', root: true })
+  const source = makeNode('', {}, { id: 'source', image })
+  const target = makeNode('Target', {}, { id: 'target', root: true })
+  const first = makeNode('First', {}, { id: 'first' })
+  const second = makeNode('Second', {}, { id: 'second' })
+  const unrelated = makeNode('Unrelated', {}, { id: 'unrelated' })
+  const nodes = [parent, source, target, first, second, unrelated]
+  const edges = [
+    makeEdge('parent', 'source', 'tree', 'incoming'),
+    makeEdge('source', 'first', 'tree', 'first-edge'),
+    makeEdge('source', 'second', 'tree', 'second-edge'),
+    makeEdge('source', 'unrelated', 'link', 'free-link'),
+    makeEdge('parent', 'unrelated', 'tree', 'unrelated-edge'),
+  ]
+
+  const result = mapModel.mergeImageNode?.(nodes, edges, 'source', 'target') ?? { error: 'missing' }
+
+  assert.equal(result.error, null)
+  assert.deepEqual(result.nodes.find((node) => node.id === 'target').data.image, image)
+  assert.equal(result.nodes.some((node) => node.id === 'source'), false)
+  assert.deepEqual(result.edges.map(({ id, source: from, target: to }) => [id, from, to]), [
+    ['first-edge', 'target', 'first'],
+    ['second-edge', 'target', 'second'],
+    ['unrelated-edge', 'parent', 'unrelated'],
+  ])
+  assert.equal(nodes.length, 6)
+  assert.equal(edges.length, 5)
+})
+
+test('merge image rejects occupied, cyclic and invalid sources', () => {
+  const source = makeNode('', {}, { id: 'source', image })
+  const occupied = makeNode('Occupied', {}, { id: 'occupied', image: { ...image, assetId: 'asset-2' } })
+  const child = makeNode('Child', {}, { id: 'child' })
+  const plain = makeNode('Plain', {}, { id: 'plain' })
+  const nodes = [source, occupied, child, plain]
+  const edges = [makeEdge('source', 'child')]
+
+  assert.equal(mapModel.mergeImageNode?.(nodes, edges, 'source', 'occupied')?.error, 'target-has-image')
+  assert.equal(mapModel.mergeImageNode?.(nodes, edges, 'source', 'child')?.error, 'cycle')
+  assert.equal(mapModel.mergeImageNode?.(nodes, edges, 'plain', 'child')?.error, 'invalid-source')
+})
+
+test('image outline keeps descendants in OPML', () => {
+  const map = normalizeMap({
+    version: 3,
+    title: 'Pictures',
+    nodes: [
+      { id: 'image', data: { label: '', image } },
+      { id: 'child', data: { label: 'Explanation' } },
+    ],
+    edges: [makeEdge('image', 'child')],
+  })
+
+  assert.match(toOpml(map), /<outline text="\[Image\]">\n\s+<outline text="Explanation"\/>/)
+})
 
 test('tree helpers keep descendants and layout predictable', () => {
   const root = makeNode('root', {}, { id: 'root', root: true })

@@ -14,6 +14,7 @@ import {
   layoutNodes,
   makeEdge,
   makeNode,
+  mergeImageNode,
   nextMatch,
   nodeInDirection,
   normalizeLibrary,
@@ -27,12 +28,15 @@ import {
   plural,
   pluralNodes,
   recolorForPalette,
+  referencedAssetIds,
   relativeTime,
   searchOrder,
   shiftNodesBelow,
   starterMap,
   toOpml,
 } from './model.js'
+import { createMindmapFile, readMindmapFile } from './archive.js'
+import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
 import { MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
@@ -81,6 +85,7 @@ const inheritColor = ref(true)
 let panelEditStart = null
 const documentsOpen = ref(false)
 const exportOpen = ref(false)
+const exportBusy = ref(false)
 const renaming = ref(false)
 const documentQuery = ref('')
 const rowMenu = ref(null)
@@ -109,11 +114,16 @@ try {
 const whatsNewUnseen = ref(seenVersion !== APP_VERSION)
 const helpOpen = ref(false)
 const helpDialog = ref(null)
+const imageDialog = ref(null)
+const imagePreview = ref(null)
+const imageUrls = reactive(new Map())
 const helpGroups = shortcutGroups()
 const keysLabel = (id) => shortcutKeys(id).join(' ')
 let helpReturnFocus = null
+let imageReturnFocus = null
+let imageLoadGeneration = 0
 let copiedTimer
-const { connectionStartHandle, dimensions, getNodes, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
+const { connectionStartHandle, dimensions, getNodes, screenToFlowCoordinate, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
@@ -190,7 +200,7 @@ const nodePath = computed(() => {
   if (node.data.root) return 'Root node'
   const parent = nodesById.value.get(parentOf.value.get(node.id))
   if (!parent) return ''
-  return (parentOf.value.has(parent.id) ? '… › ' : '') + `${parent.data.label} ›`
+  return (parentOf.value.has(parent.id) ? '… › ' : '') + `${nodeLabel(parent)} ›`
 })
 const sharedValue = (read) => {
   const values = new Set(selectedNodes.value.map(read))
@@ -205,6 +215,7 @@ const LAYOUT_OPTIONS = [['right', 'Right'], ['both', 'Both sides'], ['tree', 'Tr
 const LINE_OPTIONS = [['smooth', 'Smooth'], ['straight', 'Straight']]
 const DENSITY_OPTIONS = [['compact', 'Compact'], ['normal', 'Normal'], ['loose', 'Loose']]
 const childNodesLabel = (count) => plural(count, 'child node', 'child nodes')
+const nodeLabel = (node) => node?.data?.label || node?.data?.image?.name || 'Untitled'
 
 const depths = computed(() => {
   const children = new Map()
@@ -243,7 +254,7 @@ function branchPath({ sourceX, sourceY, targetX, targetY, sourcePosition }) {
 
 function cleanMap() {
   return {
-    version: 2,
+    version: nodes.value.some((node) => node.data.image) ? 3 : 2,
     title: title.value.trim() || 'Untitled',
     autoLayout: autoLayout.value,
     settings: { ...settings.value },
@@ -260,6 +271,13 @@ function cleanMap() {
         collapsed: Boolean(node.data.collapsed),
         root: Boolean(node.data.root),
         side: node.data.side,
+        ...(node.data.image ? { image: {
+          assetId: node.data.image.assetId,
+          name: node.data.image.name,
+          mime: node.data.image.mime,
+          naturalWidth: node.data.image.naturalWidth,
+          naturalHeight: node.data.image.naturalHeight,
+        } } : {}),
       },
     })),
     edges: edges.value.map((edge) => ({
@@ -296,6 +314,7 @@ function openMap(map) {
   editingId.value = null
   contextMenu.value = null
   applyVisibility()
+  hydrateImageUrls()
 }
 
 function restore(raw) {
@@ -323,6 +342,118 @@ function notify(message, { duration = 2600, tip = false } = {}) {
   toastTimer = setTimeout(() => (toast.value = ''), duration)
 }
 
+function clearImageUrls() {
+  imageLoadGeneration += 1
+  for (const url of imageUrls.values()) URL.revokeObjectURL(url)
+  imageUrls.clear()
+}
+
+function pruneImageUrls() {
+  const used = new Set(nodes.value.flatMap((node) => node.data.image?.assetId ? [node.data.image.assetId] : []))
+  for (const [assetId, url] of imageUrls) {
+    if (used.has(assetId)) continue
+    URL.revokeObjectURL(url)
+    imageUrls.delete(assetId)
+  }
+}
+
+async function hydrateImageUrls() {
+  clearImageUrls()
+  const generation = imageLoadGeneration
+  const ids = new Set(nodes.value.flatMap((node) => node.data.image?.assetId ? [node.data.image.assetId] : []))
+  await Promise.all([...ids].map(async (assetId) => {
+    try {
+      const record = await loadImageAsset(assetId)
+      if (!record || generation !== imageLoadGeneration
+        || !nodes.value.some((node) => node.data.image?.assetId === assetId)) return
+      const url = URL.createObjectURL(record.blob)
+      if (generation !== imageLoadGeneration) URL.revokeObjectURL(url)
+      else imageUrls.set(assetId, url)
+    } catch {
+      // A missing local blob leaves a filename placeholder instead of breaking the map.
+    }
+  }))
+}
+
+const imageOnly = (node) => Boolean(node?.data?.image && !node.data.label?.trim())
+
+async function addImageFile(file, center) {
+  const documentAtStart = activeId.value
+  if (referencedAssetIds(cleanMap()).size >= 100) return notify('A map can contain up to 100 images.')
+  try {
+    const asset = await createImageAsset(file)
+    if (activeId.value !== documentAtStart) return notify('Image was not added because the map changed.')
+    await saveImageAssets([asset])
+    if (activeId.value !== documentAtStart || referencedAssetIds(cleanMap()).size >= 100) {
+      await deleteImageAssets([asset.image.assetId]).catch(() => {})
+      return notify(activeId.value !== documentAtStart
+        ? 'Image was not added because the map changed.'
+        : 'A map can contain up to 100 images.')
+    }
+    const before = snapshot()
+    const node = makeNode('', { x: center.x - 180, y: center.y - 140 }, {
+      root: true,
+      color: branchColor(rootCount.value, settings.value.palette),
+      image: asset.image,
+    })
+    nodes.value.push(node)
+    imageUrls.set(asset.image.assetId, URL.createObjectURL(asset.blob))
+    selectOnly(node.id)
+    autoLayout.value = false
+    record(before)
+    notify('Image added · Auto layout off')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'The image could not be saved on this device.')
+  }
+}
+
+function onPaste(event) {
+  if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return
+  const files = [...(event.clipboardData?.items ?? [])]
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(Boolean)
+  if (!files.length) return
+  event.preventDefault()
+  if (files.length !== 1) return notify('Paste one image at a time.')
+  const bounds = canvasElement.value?.getBoundingClientRect()
+  if (!bounds) return
+  addImageFile(files[0], screenToFlowCoordinate({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }))
+}
+
+function onImageDrop(event) {
+  const files = [...(event.dataTransfer?.files ?? [])]
+  if (files.length !== 1) return notify('Drop one image at a time.')
+  addImageFile(files[0], screenToFlowCoordinate({ x: event.clientX, y: event.clientY }))
+}
+
+function openImagePreview(id) {
+  const node = nodes.value.find((item) => item.id === id)
+  const src = imageUrls.get(node?.data?.image?.assetId)
+  if (!src) return
+  imageReturnFocus = document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)
+  imagePreview.value = { src, name: node.data.image.name }
+  nextTick(() => imageDialog.value?.showModal())
+}
+
+function closeImagePreview() {
+  imageDialog.value?.close()
+}
+
+function onImagePreviewClosed() {
+  imagePreview.value = null
+  if (imageReturnFocus instanceof HTMLElement && imageReturnFocus.isConnected) imageReturnFocus.focus()
+  imageReturnFocus = null
+}
+
+function removeEmbeddedImage(node) {
+  if (!node?.data?.image || !node.data.label?.trim()) return
+  const before = snapshot()
+  delete node.data.image
+  pruneImageUrls()
+  record(before)
+}
+
 function applyVisibility() {
   const hidden = new Set()
   for (const node of nodes.value) {
@@ -337,11 +468,12 @@ function selectOnly(id) {
 }
 
 function focusEditor(id, initialText = null) {
+  const node = nodes.value.find((item) => item.id === id)
+  if (imageOnly(node)) return openImagePreview(id)
   for (const ancestor of ancestorsOf(id)) {
     if (searchExpanded.delete(ancestor)) nodesById.value.get(ancestor).data.collapsed = false
   }
   editingId.value = id
-  const node = nodes.value.find((item) => item.id === id)
   editDraft.value = { label: initialText ?? node?.data.label ?? '', note: node?.data.note ?? '' }
   editStart = snapshot()
   nextTick(() => {
@@ -518,6 +650,7 @@ function removeSelected() {
   }
   nodes.value = nodes.value.filter((node) => !removed.has(node.id))
   edges.value = edges.value.filter((edge) => !selectedEdges.has(edge.id) && !removed.has(edge.source) && !removed.has(edge.target))
+  pruneImageUrls()
   const childIds = new Set(edges.value.filter((edge) => edge.data?.kind === 'tree').map((edge) => edge.target))
   nodes.value.forEach((node) => (node.data.root = !childIds.has(node.id)))
   maybeRelayout()
@@ -909,14 +1042,14 @@ function attachGeometry(node, candidate) {
   const other = size(candidate)
   const side = node.position.x + own.w / 2 < candidate.position.x + other.w / 2 ? 'left' : 'right'
   const tree = settings.value.layout === 'tree'
-  const candidateOnLine = !candidate.data.root && nodeStyle(candidate.data) === 'line'
+  const candidateOnLine = !candidate.data.root && !imageOnly(candidate) && nodeStyle(candidate.data) === 'line'
   const x0 = tree
     ? candidate.position.x + (candidate.data.root ? 24 : 14)
     : candidate.position.x + (side === 'right' ? other.w : 0)
   const y0 = tree
     ? candidate.position.y + other.h - (candidateOnLine ? 1 : 0)
     : candidate.position.y + (candidateOnLine ? other.h - 1 : other.h / 2)
-  const ownOnLine = nodeStyle({ ...node.data, root: false }) === 'line'
+  const ownOnLine = !imageOnly(node) && nodeStyle({ ...node.data, root: false }) === 'line'
   const x1 = node.position.x + (tree || side === 'right' ? 0 : own.w)
   const y1 = node.position.y + (ownOnLine ? own.h - 1 : own.h / 2)
   const sourcePosition = tree ? Position.Bottom : side === 'right' ? Position.Right : Position.Left
@@ -924,7 +1057,7 @@ function attachGeometry(node, candidate) {
 }
 
 // The nearest node the dragged one will attach to: the one it was dropped on, or the closest within the radius.
-// The root attaches only on overlap — so moving a whole tree doesn't hang it off a neighbour.
+// A text root attaches only on overlap — so moving a whole tree doesn't hang it off a neighbour.
 function findAttachTarget(node, dragged = [node]) {
   const excluded = new Set(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
   const center = {
@@ -938,7 +1071,7 @@ function findAttachTarget(node, dragged = [node]) {
     const height = candidate.dimensions?.height || 30
     const overlap = center.x >= candidate.position.x && center.x <= candidate.position.x + width
       && center.y >= candidate.position.y && center.y <= candidate.position.y + height
-    if (node.data.root && !overlap) continue
+    if (node.data.root && !imageOnly(node) && !overlap) continue
     const geometry = attachGeometry(node, candidate)
     const snapsToRoot = candidate.data.root && geometry.distance <= ROOT_SNAP
     const distance = snapsToRoot ? -1 : overlap ? 0 : geometry.distance * (candidate.data.root ? ROOT_PULL : 1)
@@ -950,14 +1083,33 @@ function findAttachTarget(node, dragged = [node]) {
 
 const dragPreview = ref(null)
 
+function findMergeTarget(node, dragged) {
+  if (!imageOnly(node)) return null
+  const draggedIds = new Set(dragged.map((item) => item.id))
+  const center = {
+    x: node.position.x + (node.dimensions?.width || 180) / 2,
+    y: node.position.y + (node.dimensions?.height || 30) / 2,
+  }
+  for (const candidate of nodes.value) {
+    if (draggedIds.has(candidate.id) || candidate.hidden || !candidate.data.label?.trim()) continue
+    const width = candidate.dimensions?.width || 180
+    const height = candidate.dimensions?.height || 30
+    if (center.x < candidate.position.x || center.x > candidate.position.x + width
+      || center.y < candidate.position.y || center.y > candidate.position.y + height) continue
+    return { target: candidate, overlap: true, ...attachGeometry(node, candidate), distance: 0 }
+  }
+  return null
+}
+
 function showAttachPreview(node, dragged) {
   const parentId = parentOf.value.get(node.id)
   const parentEdge = edges.value.find((edge) => edge.data?.kind === 'tree' && edge.target === node.id)
-  const best = movedFromOrigin(node) ? findAttachTarget(node, dragged) : null
-  const changes = best && best.target.id !== parentId
+  const best = movedFromOrigin(node) ? findMergeTarget(node, dragged) ?? findAttachTarget(node, dragged) : null
+  const mode = imageOnly(node) && best?.overlap && best.target.data.label?.trim() ? 'merge' : 'attach'
+  const changes = best && (mode === 'merge' || best.target.id !== parentId)
   // Preview only: the real link doesn't change until release.
   dragPreview.value = changes
-    ? { targetId: best.target.id, path: best.path, overlap: best.overlap, color: best.target.data.root ? node.data.color : best.target.data.color }
+    ? { mode, targetId: best.target.id, path: best.path, overlap: best.overlap, color: best.target.data.root ? node.data.color : best.target.data.color }
     : null
   dropTargetId.value = changes ? best.target.id : null
   if (parentEdge) parentEdge.hidden = Boolean(changes)
@@ -1033,8 +1185,40 @@ function onNodeDragStop({ node }) {
     dragStart = null
     return
   }
-  dragBranch = null
   const target = preview ? nodesById.value.get(preview.targetId) : null
+  if (target && preview.mode === 'merge') {
+    const merged = mergeImageNode(nodes.value, edges.value, node.id, target.id)
+    if (merged.error) {
+      if (origin) {
+        dragOrigin = origin
+        moveBranch(node, true)
+        node.position = origin
+        updateSides([node.id, ...descendantsOf(node.id, edges.value)])
+        dragOrigin = null
+      }
+      dragBranch = null
+      dragStart = null
+      applyVisibility()
+      notify(merged.error === 'target-has-image'
+        ? 'This block already has an image'
+        : merged.error === 'cycle' ? 'This image cannot be merged into its own branch' : 'Image could not be added')
+      return
+    }
+    nodes.value = merged.nodes
+    edges.value = merged.edges
+    const mergedTarget = nodes.value.find((item) => item.id === target.id)
+    mergedTarget.data.collapsed = false
+    selectOnly(target.id)
+    dragBranch = null
+    orient()
+    if (autoLayout.value) relayout(false)
+    applyVisibility()
+    record(dragStart)
+    dragStart = null
+    notify(`Image added to “${nodeLabel(mergedTarget)}”`)
+    return
+  }
+  dragBranch = null
   if (target) {
     edges.value = edges.value.filter((edge) => edge.data?.kind !== 'tree' || edge.target !== node.id)
     edges.value.push(makeEdge(target.id, node.id))
@@ -1053,7 +1237,7 @@ function onNodeDragStop({ node }) {
     }
     orient()
     target.data.collapsed = false
-    notify(`Moved “${node.data.label}” to “${target.data.label}”`)
+    notify(`Moved “${nodeLabel(node)}” to “${nodeLabel(target)}”`)
   } else if (autoLayout.value) {
     // The node was moved by hand — layout no longer puts it back.
     autoLayout.value = false
@@ -1331,21 +1515,35 @@ function switchDocument(id, { keepMenu = false } = {}) {
 function addDocument(map) {
   finishEditing()
   clearTimeout(saveTimer)
-  persistDocuments(false)
+  if (!persistDocuments(false)) return false
+  const previousId = activeId.value
+  const previousHistory = history.value
+  const previousFuture = future.value
   const id = documentId()
   documents.value.push({ id, map: normalizeMap(map), updatedAt: Date.now() })
   activeId.value = id
   openMap(map)
   history.value = []
   future.value = []
-  persistDocuments()
+  if (!persistDocuments()) {
+    documents.value = documents.value.filter((document) => document.id !== id)
+    activeId.value = previousId
+    openMap(documents.value.find((document) => document.id === previousId).map)
+    history.value = previousHistory
+    future.value = previousFuture
+    return false
+  }
   requestFocus()
+  return true
 }
 
 function newMap() {
   closeMenus()
   const root = makeNode('Central idea', { x: 0, y: 0 }, { root: true, color: PALETTES.bright.colors[0] })
-  addDocument({ version: 1, title: 'New map', autoLayout: true, nodes: [root], edges: [] })
+  if (!addDocument({ version: 1, title: 'New map', autoLayout: true, nodes: [root], edges: [] })) {
+    notify('The map could not be saved on this device.')
+    return
+  }
   selectOnly(root.id)
   focusEditor(root.id)
 }
@@ -1435,32 +1633,69 @@ function undoDeletion() {
   setTimeout(() => flashDocId.value === pending.document.id && (flashDocId.value = null), 1500)
 }
 
-function exportMap(format) {
-  exportOpen.value = false
-  const opml = format === 'opml'
-  const content = opml ? toOpml(cleanMap()) : JSON.stringify(cleanMap(), null, 2)
-  const blob = new Blob([content], { type: opml ? 'text/x-opml' : 'application/json' })
+function download(blob, extension) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `${(title.value || 'mind-map').replace(/[^\p{L}\p{N}_-]+/gu, '-')}.${opml ? 'opml' : 'mindmap'}`
+  link.download = `${(title.value || 'mind-map').replace(/[^\p{L}\p{N}_-]+/gu, '-')}.${extension}`
   link.click()
   URL.revokeObjectURL(url)
-  notify(opml ? 'OPML saved' : 'Map file saved')
+}
+
+async function exportMap(format) {
+  if (exportBusy.value) return
+  exportOpen.value = false
+  const opml = format === 'opml'
+  const map = cleanMap()
+  if (opml) {
+    download(new Blob([toOpml(map)], { type: 'text/x-opml' }), 'opml')
+    notify(referencedAssetIds(map).size ? 'OPML saved — images were exported as text only' : 'OPML saved')
+    return
+  }
+  exportBusy.value = true
+  try {
+    download(await createMindmapFile(map, loadImageAsset), 'mindmap')
+    notify('Map file saved')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Could not export the map')
+  } finally {
+    exportBusy.value = false
+  }
 }
 
 async function loadFile(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
   if (!file) return
+  let importedAssetIds = []
   try {
-    const text = await file.text()
-    const map = file.name.toLowerCase().endsWith('.opml') || text.trimStart().startsWith('<')
-      ? parseOpml(text)
-      : normalizeMap(JSON.parse(text))
-    addDocument(map)
+    const imported = await readMindmapFile(file)
+    let map
+    if (imported.kind === 'archive') {
+      const assets = []
+      for (const asset of imported.assets) {
+        let decoded
+        try {
+          decoded = await createImageAsset(new File([asset.blob], asset.image.name, { type: asset.image.mime }), asset.image.assetId)
+        } catch {
+          throw new Error('The map archive is incomplete or corrupted.')
+        }
+        if (decoded.image.naturalWidth !== asset.image.naturalWidth || decoded.image.naturalHeight !== asset.image.naturalHeight) {
+          throw new Error('The map archive is incomplete or corrupted.')
+        }
+        assets.push(decoded)
+      }
+      await saveImageAssets(assets)
+      importedAssetIds = assets.map((asset) => asset.image.assetId)
+      map = imported.map
+    } else {
+      map = imported.kind === 'opml' ? parseOpml(imported.text) : normalizeMap(JSON.parse(imported.text))
+    }
+    if (!addDocument(map)) throw new Error('The map could not be saved on this device.')
+    importedAssetIds = []
     notify(`Added: ${file.name}`)
   } catch (error) {
+    if (importedAssetIds.length) await deleteImageAssets(importedAssetIds).catch(() => {})
     notify(error instanceof Error ? error.message : 'Could not open the file')
   }
 }
@@ -1691,8 +1926,15 @@ watch([nodes, edges, title, autoLayout, settings], () => {
 onMounted(() => {
   applyVisibility()
   persistDocuments()
+  hydrateImageUrls()
+  const usedAssets = new Set()
+  for (const document of documents.value) {
+    for (const assetId of referencedAssetIds(document.map)) usedAssets.add(assetId)
+  }
+  pruneImageAssets(usedAssets).catch(() => {})
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
+  window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
   window.addEventListener('resize', placeSearch)
   clockTimer = setInterval(() => (now.value = Date.now()), 60000)
@@ -1712,6 +1954,7 @@ function showShortcutsTip() {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
+  window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
   window.removeEventListener('resize', placeSearch)
   persistDocuments(false)
@@ -1721,13 +1964,14 @@ onBeforeUnmount(() => {
   clearInterval(clockTimer)
   cancelAnimationFrame(layoutFrame)
   clearTimeout(focusTimer)
+  clearImageUrls()
 })
 </script>
 
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }" @dragover.prevent @drop.prevent="onImageDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -1771,18 +2015,31 @@ onBeforeUnmount(() => {
               :class="[`style-${nodeStyle(data)}`, `side-${data.side}`, `kids-${childrenSide(id, data)}`, {
                 selected,
                 root: data.root,
+                'image-only': data.image && !data.label,
                 deep: (depths.get(id) ?? 0) > 2,
                 editing: editingId === id,
                 collapsed: data.collapsed,
                 'drop-target': dropTargetId === id,
+                'merge-target': dropTargetId === id && dragPreview?.mode === 'merge',
                 'search-match': searchState(id) === 'match' || searchState(id) === 'current',
                 'search-current': searchState(id) === 'current',
               }]"
               :style="{ '--branch': data.color }"
               :aria-current="selected ? 'true' : undefined"
+              :aria-label="data.label || data.image?.name"
+              tabindex="-1"
             >
               <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" />
               <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" title="Drag to link to another node" />
+              <img
+                v-if="data.image && imageUrls.get(data.image.assetId)"
+                class="node-image"
+                :src="imageUrls.get(data.image.assetId)"
+                :alt="data.label ? '' : data.image.name"
+                draggable="false"
+                @dblclick.stop="openImagePreview(id)"
+              />
+              <span v-else-if="data.image" class="image-placeholder">{{ data.image.name }}</span>
               <div
                 v-if="editingId === id"
                 class="node-editor nodrag nopan"
@@ -1816,7 +2073,7 @@ onBeforeUnmount(() => {
                 />
               </div>
               <template v-else>
-                <span class="node-title"><template v-for="(part, index) in searchParts(id, data.label)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="data.label" class="node-title"><template v-for="(part, index) in searchParts(id, data.label)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 <span v-if="data.note" class="node-note"><template v-for="(part, index) in searchParts(id, data.note)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
               </template>
               <button
@@ -2058,8 +2315,8 @@ onBeforeUnmount(() => {
             </button>
             <span class="divider"></span>
             <div class="export-wrap">
-              <button class="export-button" :aria-expanded="exportOpen" aria-haspopup="menu" @click="toggleExport">
-                Export
+              <button class="export-button" :disabled="exportBusy" :aria-expanded="exportOpen" aria-haspopup="menu" @click="toggleExport">
+                {{ exportBusy ? 'Exporting…' : 'Export' }}
                 <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
               </button>
               <div v-if="exportOpen" class="island-menu export-menu" role="menu">
@@ -2081,7 +2338,7 @@ onBeforeUnmount(() => {
         </div>
         <input ref="fileInput" class="visually-hidden" name="map-file" aria-label="Open map file" type="file" accept=".mindmap,.json,.opml,application/json,text/xml" @change="loadFile" />
 
-        <svg v-if="dragPreview" class="attach-preview" aria-hidden="true">
+        <svg v-if="dragPreview?.mode === 'attach'" class="attach-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
             <path :d="dragPreview.path" :stroke="dragPreview.color" />
           </g>
@@ -2111,7 +2368,7 @@ onBeforeUnmount(() => {
         <header class="inspector-head">
           <div class="inspector-title">
             <span>{{ inspectorMode === 'map' ? 'Map' : inspectorMode === 'multi' ? 'Selection' : nodePath }}</span>
-            <strong>{{ inspectorMode === 'map' ? title : inspectorMode === 'multi' ? pluralNodes(selectedCount) : primaryNode.data.label }}</strong>
+            <strong>{{ inspectorMode === 'map' ? title : inspectorMode === 'multi' ? pluralNodes(selectedCount) : primaryNode.data.label || primaryNode.data.image?.name }}</strong>
           </div>
           <button v-if="inspectorMode === 'multi'" class="inspector-text-button" @click="clearSelection">Clear</button>
           <button v-else class="inspector-close" title="Close panel" aria-label="Close panel" @click="inspectorOpen = false">
@@ -2121,7 +2378,13 @@ onBeforeUnmount(() => {
 
         <div ref="inspectorBody" class="inspector-body">
           <template v-if="inspectorMode === 'node'">
-            <section class="panel-section">
+            <section v-if="primaryNode.data.image" class="panel-section">
+              <h3>Image</h3>
+              <p class="panel-hint">{{ primaryNode.data.image.name }}</p>
+              <button v-if="primaryNode.data.label" class="panel-image-remove" @click="removeEmbeddedImage(primaryNode)">Remove image</button>
+            </section>
+
+            <section v-if="primaryNode.data.label" class="panel-section">
               <h3>Text</h3>
               <input
                 class="panel-input title-input"
@@ -2263,7 +2526,7 @@ onBeforeUnmount(() => {
       <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }">
         <button @click="addChild(contextMenu.id)"><span>＋</span>Child node <kbd>{{ keysLabel('addChild') }}</kbd></button>
         <button @click="addSibling"><span>↳</span>Sibling node <kbd>{{ keysLabel('addSibling') }}</kbd></button>
-        <button @click="focusEditor(contextMenu.id); contextMenu = null"><span>✎</span>Edit</button>
+        <button @click="focusEditor(contextMenu.id); contextMenu = null"><span>✎</span>{{ imageOnly(nodes.find((node) => node.id === contextMenu.id)) ? 'Preview' : 'Edit' }}</button>
         <button v-if="hasChildren(contextMenu.id)" @click="toggleCollapse(contextMenu.id); contextMenu = null"><span>⌁</span>Collapse / expand</button>
         <hr />
         <button class="danger" :disabled="nodes.find((node) => node.id === contextMenu.id)?.data.root && rootCount === 1" @click="removeSelected"><span>⌫</span>Delete branch</button>
@@ -2283,6 +2546,11 @@ onBeforeUnmount(() => {
         </div>
         <div v-else-if="toast" class="toast" :class="{ 'undo-toast': toastTip }" role="status">{{ toast }}</div>
       </Transition>
+
+      <dialog v-if="imagePreview" ref="imageDialog" class="image-preview" aria-label="Image preview" @close="onImagePreviewClosed" @click.self="closeImagePreview">
+        <button class="image-preview-close" aria-label="Close image preview" @click="closeImagePreview">×</button>
+        <img :src="imagePreview.src" :alt="imagePreview.name" />
+      </dialog>
 
       <Transition name="help">
         <div v-if="helpOpen" class="help-backdrop" @click="closeHelp">
