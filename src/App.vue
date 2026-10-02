@@ -350,6 +350,11 @@ function focusNoteEditor(id) {
   nextTick(() => document.querySelector(`[data-note-editor="${CSS.escape(id)}"]`)?.focus())
 }
 
+function finishEditingFromNote(id) {
+  finishEditing()
+  nextTick(() => document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)?.focus())
+}
+
 function onEditorFocusOut(event) {
   if (event.currentTarget.contains(event.relatedTarget)) return
   finishEditing()
@@ -1546,6 +1551,7 @@ onBeforeUnmount(() => {
             <div
               class="mind-node"
               :data-mind-node="id"
+              tabindex="-1"
               :class="[`style-${nodeStyle(data)}`, `side-${data.side}`, `kids-${childrenSide(id, data)}`, {
                 selected,
                 root: data.root,
@@ -1587,6 +1593,7 @@ onBeforeUnmount(() => {
                   placeholder="Details"
                   aria-label="Second line"
                   @keydown.enter.prevent="finishEditing()"
+                  @keydown.tab.exact.prevent="finishEditingFromNote(id)"
                   @keydown.esc.prevent="finishEditing(false)"
                 />
               </div>
