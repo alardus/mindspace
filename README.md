@@ -1,44 +1,104 @@
-# Mindspace
+<div align="center">
 
-A local mind-mapping app built with Vue 3 and Vue Flow. Everything runs in the browser: there is no server or account, and maps are saved automatically on your device.
+<img src="public/logo.svg" width="72" height="72" alt="mindspace logo">
+
+# mindspace
+
+**Local-first mind maps in your browser.**
+Fast to type, calm to look at, and your data never leaves your device.
+
+[Try it](https://mindspace-flame-seven.vercel.app/) · [Report a bug](https://github.com/alardus/mindspace/issues/new) · [Changelog](https://github.com/alardus/mindspace/tags)
+
+[![deploy](https://img.shields.io/github/deployments/alardus/mindspace/Production?label=vercel&logo=vercel)](https://mindspace-flame-seven.vercel.app/)
+![version](https://img.shields.io/github/package-json/v/alardus/mindspace?color=1F2421&label=version)
+![license](https://img.shields.io/github/license/alardus/mindspace?color=1F2421)
+
+<!-- <img src="docs/screenshot-light.png" width="860" alt="mindspace — a subscriptions map in light theme"> -->
+
+</div>
+
+## Why mindspace
+
+Most mind-map tools are either cloud editors with accounts and paywalls, or desktop apps from another decade. mindspace is a single web page: open it and start typing. Maps are saved locally, work offline, and export to plain files you own.
 
 ## Features
 
-- **Several maps.** Create, rename, duplicate, delete and search maps from the switcher next to the map title. A deleted map can be restored from the notification.
-- **Editing.** Add child and sibling nodes, edit text in place, and add a gray second line for details such as a price or a note. Collapse and expand branches, select several nodes at once, and draw free links between any two nodes by dragging from a node's edge.
-- **Drag to reattach.** Drag a node or a branch onto another node to move it there. While you drag, a preview line shows where it will attach.
-- **Images.** Paste or drop PNG, JPEG, WebP and GIF files up to 2 MB onto the canvas. An image starts as a free block that can have children; drop it onto a text node to make it part of that node, or double-click it for a full-size preview.
-- **Layout.** Turn on auto layout and choose a direction (right, both sides or tree), smooth or straight lines, and the spacing. With auto layout off, nodes stay where you put them.
-- **Inspector panel.** Change a node's text, branch color and style (line, card or text), or change map-wide settings such as the branch palette (Bright, Calm or Mono).
-- **Undo and redo** for every change.
-- **Import and export.** Download a map as a `.mindmap` file or as an OPML outline. Image maps use a ZIP-backed `.mindmap`; maps without images and older `.mindmap`/`.json` files remain plain JSON. OPML keeps the text tree and represents image-only nodes as `[Image]`.
-- **Keyboard shortcuts.** Press <kbd>?</kbd> to see them all.
-- **App menu.** The menu shows the app version (click to copy it) and links to the release notes and to the issue tracker.
+- **Keyboard-first editing.** `Tab` for a child, `Enter` for a sibling, and just start typing to edit the selected node. You can build a whole map without touching the mouse.
+- **Two-line nodes.** A title plus a quiet secondary line for prices, dates, or notes. Numbers line up.
+- **Search across the map.** `⌘F` highlights matches, dims everything else, and pans to each result, even inside collapsed branches.
+- **Many maps, one place.** Switch, rename, duplicate, and delete maps from a single menu, with undo for deletions.
+- **Drag to rearrange.** Drop a node or a whole branch onto another node to reattach it, or draw free links between any two nodes.
+- **Images.** Paste or drop PNG, JPEG, WebP, or GIF files up to 2 MB onto the canvas, as a block of their own or inside a node.
+- **Auto layout.** Branches to the right, on both sides, or as a tree, with smooth or straight lines and adjustable spacing. Turn it off to place nodes by hand.
+- **Branch palettes.** Bright, Calm, or Mono, plus per-branch colors inherited by children.
+- **Light and dark themes.** Follows your system or set manually; branch colors adapt to each theme.
+- **Import and export.** `.mindmap` files for backups (images included), OPML outlines for other tools.
+- **Local-first.** Everything lives in your browser storage. No account, no server, no tracking.
 
-First-time visitors see a short welcome map that demonstrates the main features.
+<details>
+<summary><b>Keyboard shortcuts</b></summary>
 
-## Storage
+| Action | Shortcut |
+|---|---|
+| Child node | `Tab` |
+| Sibling node | `Enter` |
+| Edit text | start typing |
+| Secondary line (while editing) | `Tab` or `Shift` `Enter` |
+| Delete node | `Del` |
+| Move between nodes | `←` `↑` `→` `↓` |
+| Collapse / expand branch | `⌥` `←` / `⌥` `→` |
+| Search | `⌘` `F` |
+| Pan / zoom | `Space` drag / `⌘` wheel |
+| Undo / redo | `⌘` `Z` / `⇧` `⌘` `Z` |
+| Toggle theme | `⇧` `⌘` `L` |
+| All shortcuts | `?` |
 
-Maps live in the browser's `localStorage` under the `mindspace-library-v1` key, while image blobs are stored separately in IndexedDB under `mindspace-assets-v1`. Clearing site data removes both, so export the maps you want to keep. Maps saved by older versions under `mindspace-map-v1` are migrated automatically.
+On Windows and Linux use `Ctrl` instead of `⌘` and `Alt` instead of `⌥`.
+</details>
 
-## Development
+## Getting started
 
-Requires Node.js 20.19 or later (needed by Vite 7).
+Requires Node.js 24 or later.
 
 ```bash
+git clone https://github.com/alardus/mindspace.git
+cd mindspace
 npm install
-npm run dev      # start the dev server
-npm test         # run unit tests (node --test)
-npm run build    # production build into dist/
+npm run dev
 ```
 
-The app version and repository URL come from `package.json` and appear in the app menu. The "What's new" item links to the GitHub release `v<version>`.
+Then open the URL printed in the terminal.
 
-## Project structure
+| Script | What it does |
+|---|---|
+| `npm run dev` | Start the dev server with hot reload |
+| `npm run build` | Production build into `dist/` |
+| `npm test` | Run tests |
 
-- `src/App.vue`: the app UI, including the canvas, toolbars, inspector, menus and dialogs.
-- `src/model.js`: the map model, covering normalization, layout, palettes, OPML import and export, and the welcome map.
-- `src/assets.js` and `src/archive.js`: local image storage and `.mindmap` archive import/export.
-- `src/shortcuts.js`: the keyboard shortcut registry used by the key handlers and the help dialog.
-- `src/style.css`: styles.
-- `test/`: unit tests for the model and shortcuts.
+The app version and repository URL come from `package.json` and appear in the app menu; "What's new" links to the GitHub release `v<version>`.
+
+## Where your data lives
+
+Maps are stored in your browser on this device only: the map library in `localStorage` (`mindspace-library-v1`) and images in IndexedDB (`mindspace-assets-v1`). Clearing site data removes them, so export a backup from **Export → Mindspace file** if a map matters to you. Nothing is sent to any server.
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+1. Open an issue first for anything bigger than a small fix, so we can agree on the approach.
+2. Fork, create a branch, and keep commits focused.
+3. Run `npm test` and `npm run build` before opening a PR.
+4. For UI changes, include a screenshot in both light and dark themes.
+
+Where things are:
+
+- `src/App.vue`: the app UI: canvas, toolbars, inspector, menus, and dialogs.
+- `src/model.js`: the map model: normalization, layout, palettes, OPML, and the welcome map.
+- `src/assets.js`, `src/archive.js`: local image storage and `.mindmap` archives.
+- `src/shortcuts.js`: the shortcut registry behind the key handlers and the help dialog.
+- `src/style.css`: styles and theme tokens.
+- `test/`: unit tests.
+
+## License
+
+[MIT](LICENSE) © Alexander Bykov
