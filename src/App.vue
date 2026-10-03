@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
   DEFAULT_SIZE,
@@ -8,14 +8,18 @@ import {
   STORAGE_KEY,
   branchColor,
   descendantsOf,
+  highlightParts,
   insertTreeEdgeAfter,
   layoutVerticalGap,
   layoutNodes,
   makeEdge,
   makeNode,
+  mergeImageNode,
+  nextMatch,
   nodeInDirection,
   normalizeLibrary,
   normalizeMap,
+  normalizeSearch,
   normalizeSettings,
   nodeStyle,
   orientEdges,
@@ -24,11 +28,15 @@ import {
   plural,
   pluralNodes,
   recolorForPalette,
+  referencedAssetIds,
   relativeTime,
+  searchOrder,
   shiftNodesBelow,
   starterMap,
   toOpml,
 } from './model.js'
+import { createMindmapFile, readMindmapFile } from './archive.js'
+import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
 import { MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
@@ -77,6 +85,7 @@ const inheritColor = ref(true)
 let panelEditStart = null
 const documentsOpen = ref(false)
 const exportOpen = ref(false)
+const exportBusy = ref(false)
 const renaming = ref(false)
 const documentQuery = ref('')
 const rowMenu = ref(null)
@@ -105,14 +114,20 @@ try {
 const whatsNewUnseen = ref(seenVersion !== APP_VERSION)
 const helpOpen = ref(false)
 const helpDialog = ref(null)
+const imageDialog = ref(null)
+const imagePreview = ref(null)
+const imageUrls = reactive(new Map())
 const helpGroups = shortcutGroups()
 const keysLabel = (id) => shortcutKeys(id).join(' ')
 let helpReturnFocus = null
+let imageReturnFocus = null
+let imageLoadGeneration = 0
 let copiedTimer
-const { connectionStartHandle, dimensions, getNodes, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
+const { connectionStartHandle, dimensions, getNodes, screenToFlowCoordinate, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
+const easeOut = (t) => 1 - (1 - t) ** 3
 const canvasElement = ref(null)
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
@@ -185,7 +200,7 @@ const nodePath = computed(() => {
   if (node.data.root) return 'Root node'
   const parent = nodesById.value.get(parentOf.value.get(node.id))
   if (!parent) return ''
-  return (parentOf.value.has(parent.id) ? '… › ' : '') + `${parent.data.label} ›`
+  return (parentOf.value.has(parent.id) ? '… › ' : '') + `${nodeLabel(parent)} ›`
 })
 const sharedValue = (read) => {
   const values = new Set(selectedNodes.value.map(read))
@@ -200,6 +215,7 @@ const LAYOUT_OPTIONS = [['right', 'Right'], ['both', 'Both sides'], ['tree', 'Tr
 const LINE_OPTIONS = [['smooth', 'Smooth'], ['straight', 'Straight']]
 const DENSITY_OPTIONS = [['compact', 'Compact'], ['normal', 'Normal'], ['loose', 'Loose']]
 const childNodesLabel = (count) => plural(count, 'child node', 'child nodes')
+const nodeLabel = (node) => node?.data?.label || node?.data?.image?.name || 'Untitled'
 
 const depths = computed(() => {
   const children = new Map()
@@ -238,7 +254,7 @@ function branchPath({ sourceX, sourceY, targetX, targetY, sourcePosition }) {
 
 function cleanMap() {
   return {
-    version: 2,
+    version: nodes.value.some((node) => node.data.image) ? 3 : 2,
     title: title.value.trim() || 'Untitled',
     autoLayout: autoLayout.value,
     settings: { ...settings.value },
@@ -255,6 +271,13 @@ function cleanMap() {
         collapsed: Boolean(node.data.collapsed),
         root: Boolean(node.data.root),
         side: node.data.side,
+        ...(node.data.image ? { image: {
+          assetId: node.data.image.assetId,
+          name: node.data.image.name,
+          mime: node.data.image.mime,
+          naturalWidth: node.data.image.naturalWidth,
+          naturalHeight: node.data.image.naturalHeight,
+        } } : {}),
       },
     })),
     edges: edges.value.map((edge) => ({
@@ -291,6 +314,7 @@ function openMap(map) {
   editingId.value = null
   contextMenu.value = null
   applyVisibility()
+  hydrateImageUrls()
 }
 
 function restore(raw) {
@@ -318,10 +342,122 @@ function notify(message, { duration = 2600, tip = false } = {}) {
   toastTimer = setTimeout(() => (toast.value = ''), duration)
 }
 
+function clearImageUrls() {
+  imageLoadGeneration += 1
+  for (const url of imageUrls.values()) URL.revokeObjectURL(url)
+  imageUrls.clear()
+}
+
+function pruneImageUrls() {
+  const used = new Set(nodes.value.flatMap((node) => node.data.image?.assetId ? [node.data.image.assetId] : []))
+  for (const [assetId, url] of imageUrls) {
+    if (used.has(assetId)) continue
+    URL.revokeObjectURL(url)
+    imageUrls.delete(assetId)
+  }
+}
+
+async function hydrateImageUrls() {
+  clearImageUrls()
+  const generation = imageLoadGeneration
+  const ids = new Set(nodes.value.flatMap((node) => node.data.image?.assetId ? [node.data.image.assetId] : []))
+  await Promise.all([...ids].map(async (assetId) => {
+    try {
+      const record = await loadImageAsset(assetId)
+      if (!record || generation !== imageLoadGeneration
+        || !nodes.value.some((node) => node.data.image?.assetId === assetId)) return
+      const url = URL.createObjectURL(record.blob)
+      if (generation !== imageLoadGeneration) URL.revokeObjectURL(url)
+      else imageUrls.set(assetId, url)
+    } catch {
+      // A missing local blob leaves a filename placeholder instead of breaking the map.
+    }
+  }))
+}
+
+const imageOnly = (node) => Boolean(node?.data?.image && !node.data.label?.trim())
+
+async function addImageFile(file, center) {
+  const documentAtStart = activeId.value
+  if (referencedAssetIds(cleanMap()).size >= 100) return notify('A map can contain up to 100 images.')
+  try {
+    const asset = await createImageAsset(file)
+    if (activeId.value !== documentAtStart) return notify('Image was not added because the map changed.')
+    await saveImageAssets([asset])
+    if (activeId.value !== documentAtStart || referencedAssetIds(cleanMap()).size >= 100) {
+      await deleteImageAssets([asset.image.assetId]).catch(() => {})
+      return notify(activeId.value !== documentAtStart
+        ? 'Image was not added because the map changed.'
+        : 'A map can contain up to 100 images.')
+    }
+    const before = snapshot()
+    const node = makeNode('', { x: center.x - 180, y: center.y - 140 }, {
+      root: true,
+      color: branchColor(rootCount.value, settings.value.palette),
+      image: asset.image,
+    })
+    nodes.value.push(node)
+    imageUrls.set(asset.image.assetId, URL.createObjectURL(asset.blob))
+    selectOnly(node.id)
+    autoLayout.value = false
+    record(before)
+    notify('Image added · Auto layout off')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'The image could not be saved on this device.')
+  }
+}
+
+function onPaste(event) {
+  if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return
+  const files = [...(event.clipboardData?.items ?? [])]
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(Boolean)
+  if (!files.length) return
+  event.preventDefault()
+  if (files.length !== 1) return notify('Paste one image at a time.')
+  const bounds = canvasElement.value?.getBoundingClientRect()
+  if (!bounds) return
+  addImageFile(files[0], screenToFlowCoordinate({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }))
+}
+
+function onImageDrop(event) {
+  const files = [...(event.dataTransfer?.files ?? [])]
+  if (files.length !== 1) return notify('Drop one image at a time.')
+  addImageFile(files[0], screenToFlowCoordinate({ x: event.clientX, y: event.clientY }))
+}
+
+function openImagePreview(id) {
+  const node = nodes.value.find((item) => item.id === id)
+  const src = imageUrls.get(node?.data?.image?.assetId)
+  if (!src) return
+  imageReturnFocus = document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)
+  imagePreview.value = { src, name: node.data.image.name }
+  nextTick(() => imageDialog.value?.showModal())
+}
+
+function closeImagePreview() {
+  imageDialog.value?.close()
+}
+
+function onImagePreviewClosed() {
+  imagePreview.value = null
+  if (imageReturnFocus instanceof HTMLElement && imageReturnFocus.isConnected) imageReturnFocus.focus()
+  imageReturnFocus = null
+}
+
+function removeEmbeddedImage(node) {
+  if (!node?.data?.image || !node.data.label?.trim()) return
+  const before = snapshot()
+  delete node.data.image
+  pruneImageUrls()
+  record(before)
+}
+
 function applyVisibility() {
   const hidden = new Set()
   for (const node of nodes.value) {
-    if (node.data.collapsed) descendantsOf(node.id, edges.value).forEach((id) => hidden.add(id))
+    if (node.data.collapsed && !searchExpanded.has(node.id)) descendantsOf(node.id, edges.value).forEach((id) => hidden.add(id))
   }
   for (const node of nodes.value) node.hidden = hidden.has(node.id)
   for (const edge of edges.value) edge.hidden = hidden.has(edge.source) || hidden.has(edge.target)
@@ -332,8 +468,12 @@ function selectOnly(id) {
 }
 
 function focusEditor(id, initialText = null) {
-  editingId.value = id
   const node = nodes.value.find((item) => item.id === id)
+  if (imageOnly(node)) return openImagePreview(id)
+  for (const ancestor of ancestorsOf(id)) {
+    if (searchExpanded.delete(ancestor)) nodesById.value.get(ancestor).data.collapsed = false
+  }
+  editingId.value = id
   editDraft.value = { label: initialText ?? node?.data.label ?? '', note: node?.data.note ?? '' }
   editStart = snapshot()
   nextTick(() => {
@@ -410,7 +550,7 @@ function relayout(remember = true, fit = false, animate = false, anchorId = prim
     const start = performance.now()
     const step = (time) => {
       const t = Math.min(1, (time - start) / 250)
-      const ease = 1 - (1 - t) ** 3
+      const ease = easeOut(t)
       for (const { node, from, to } of moves) {
         node.position = { x: from.x + (to.x - from.x) * ease, y: from.y + (to.y - from.y) * ease }
       }
@@ -510,6 +650,7 @@ function removeSelected() {
   }
   nodes.value = nodes.value.filter((node) => !removed.has(node.id))
   edges.value = edges.value.filter((edge) => !selectedEdges.has(edge.id) && !removed.has(edge.source) && !removed.has(edge.target))
+  pruneImageUrls()
   const childIds = new Set(edges.value.filter((edge) => edge.data?.kind === 'tree').map((edge) => edge.target))
   nodes.value.forEach((node) => (node.data.root = !childIds.has(node.id)))
   maybeRelayout()
@@ -532,13 +673,22 @@ function hiddenCount(id) {
 
 // Which side of the node its descendants are on: the collapse button goes there.
 function childrenSide(id, data) {
-  const child = edges.value.find((edge) => edge.source === id && edge.data?.kind === 'tree')
-  const side = child ? nodesById.value.get(child.target)?.data.side : data.side
+  const child = firstChild.value.get(id)
+  const side = child ? nodesById.value.get(child)?.data.side : data.side
   return side === 'left' ? 'left' : 'right'
 }
 
+// One pass over edges instead of a scan per rendered node: big maps re-render thousands of nodes at once.
+const firstChild = computed(() => {
+  const result = new Map()
+  for (const edge of edges.value) {
+    if (edge.data?.kind === 'tree' && !result.has(edge.source)) result.set(edge.source, edge.target)
+  }
+  return result
+})
+
 function hasChildren(id) {
-  return edges.value.some((edge) => edge.source === id && edge.data?.kind === 'tree')
+  return firstChild.value.has(id)
 }
 
 function setColor(color) {
@@ -604,6 +754,9 @@ function clearSelection() {
   for (const node of nodes.value) node.selected = false
 }
 
+// How far to move a [from, to] span into [low, high]; a span too big to fit aligns to low.
+const shiftInto = (low, high, from, to) => (to - from > high - low || from < low ? low - from : to > high ? high - to : 0)
+
 function ensureNodeVisible(id) {
   const element = document.querySelector(`[data-mind-node="${CSS.escape(id)}"]`)
   const canvas = canvasElement.value
@@ -615,12 +768,8 @@ function ensureNodeVisible(id) {
   const right = canvasBounds.right - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
   const top = canvasBounds.top + margin
   const bottom = canvasBounds.bottom - margin
-  const x = bounds.width > right - left
-    ? left - bounds.left
-    : bounds.left < left ? left - bounds.left : bounds.right > right ? right - bounds.right : 0
-  const y = bounds.height > bottom - top
-    ? top - bounds.top
-    : bounds.top < top ? top - bounds.top : bounds.bottom > bottom ? bottom - bounds.bottom : 0
+  const x = shiftInto(left, right, bounds.left, bounds.right)
+  const y = shiftInto(top, bottom, bounds.top, bounds.bottom)
   if (x || y) {
     setViewport({ x: viewport.value.x + x, y: viewport.value.y + y, zoom: viewport.value.zoom }, { duration: 180 })
   }
@@ -647,6 +796,194 @@ function navigateNodes(key) {
   selectOnly(target.id)
   nextTick(() => ensureNodeVisible(target.id))
 }
+
+// Map search (5a). Lives outside the map: not saved, not in undo history.
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchTerm = ref('')
+const searchCurrentId = ref(null)
+const searchInput = ref(null)
+const documentIsland = ref(null)
+const topRight = ref(null)
+const searchPlacement = ref({ top: 12, width: 440 })
+// Collapsed branches temporarily opened to show the current match.
+let searchExpanded = new Set()
+let searchAnchorId = null
+let searchedTerm = ''
+let searchTimer
+// Camera target while a reveal is still animating: quick steps build on it, not on a mid-flight viewport.
+let revealCamera = null
+let revealUntil = 0
+
+const searchIndex = computed(() => new Map(nodes.value.map((node) => [node.id, normalizeSearch(`${node.data.label}\n${node.data.note}`)])))
+const searchOrderIds = computed(() => searchOrder(nodes.value, edges.value))
+const searchMatches = computed(() => {
+  const term = searchTerm.value
+  if (!searchOpen.value || !term) return []
+  return searchOrderIds.value.filter((id) => searchIndex.value.get(id)?.includes(term))
+})
+// Matches and every node above them: lines along these paths stay bright.
+const searchPath = computed(() => {
+  const path = new Set()
+  for (const id of searchMatches.value) ancestorsOf(id).forEach((ancestor) => path.add(ancestor))
+  searchMatches.value.forEach((id) => path.add(id))
+  return path
+})
+const searchCount = computed(() => (searchMatches.value.length
+  ? `${searchMatches.value.indexOf(searchCurrentId.value) + 1} of ${searchMatches.value.length}`
+  : 'No matches'))
+
+function ancestorsOf(id) {
+  const result = []
+  for (let parent = parentOf.value.get(id); parent && !result.includes(parent); parent = parentOf.value.get(parent)) result.push(parent)
+  return result
+}
+
+// Per-node search state: 'path' | 'match' | 'current'. A reactive Map tracks each id separately,
+// so a step re-renders only the nodes that changed, not all of them.
+const searchMarks = reactive(new Map())
+watch([searchPath, searchCurrentId, searchTerm], () => {
+  const next = new Map([...searchPath.value].map((id) => [id, 'path']))
+  searchMatches.value.forEach((id) => next.set(id, 'match'))
+  if (next.has(searchCurrentId.value)) next.set(searchCurrentId.value, 'current')
+  for (const id of [...searchMarks.keys()]) if (!next.has(id)) searchMarks.delete(id)
+  const term = searchTerm.value
+  for (const [id, state] of next) {
+    const old = searchMarks.get(id)
+    if (old?.state !== state || old.term !== term) searchMarks.set(id, { state, term })
+  }
+})
+const searchState = (id) => searchMarks.get(id)?.state
+const searchParts = (id, text) => {
+  const mark = searchMarks.get(id)
+  return mark && mark.state !== 'path' ? highlightParts(text, mark.term) : [{ text, match: false }]
+}
+
+// Centered over the visible canvas; if it would run into the side islands, it moves below the toolbar.
+function placeSearch() {
+  const visible = window.innerWidth - (inspectorOpen.value ? INSPECTOR_SPACE : 0)
+  const side = Math.max(documentIsland.value?.offsetWidth ?? 0, topRight.value?.offsetWidth ?? 0) + 12
+  const available = visible - 2 * (side + 24)
+  searchPlacement.value = available >= 280 ? { top: 12, width: Math.min(440, available) } : { top: 64, width: Math.min(440, visible - 48) }
+}
+
+function openSearch() {
+  closeMenus()
+  if (!searchOpen.value) {
+    searchOpen.value = true
+    searchAnchorId = primaryNode.value?.id ?? null
+    searchedTerm = null
+    placeSearch()
+  }
+  nextTick(() => searchInput.value?.select())
+}
+
+// Selecting is deferred to here: a selection change costs a deep pass over the map (autosave watcher), too slow per step on big maps.
+function closeSearch() {
+  if (!searchOpen.value) return
+  searchOpen.value = false
+  if (searchCurrentId.value) selectOnly(searchCurrentId.value)
+  searchCurrentId.value = null
+  searchExpanded = new Set()
+  applyVisibility()
+  if (document.activeElement?.closest?.('.search-island, .search-toggle')) document.activeElement.blur()
+}
+
+function flushSearch() {
+  clearTimeout(searchTimer)
+  searchTerm.value = normalizeSearch(searchQuery.value.trim())
+}
+
+function setSearchCurrent(id) {
+  searchCurrentId.value = id
+  if (!id) return
+  searchExpanded = new Set(ancestorsOf(id).filter((ancestor) => nodesById.value.get(ancestor)?.data.collapsed))
+  applyVisibility()
+  revealSearchMatch(id)
+}
+
+function stepSearch(step) {
+  flushSearch()
+  const list = searchMatches.value
+  if (!list.length) return
+  const index = list.indexOf(searchCurrentId.value)
+  setSearchCurrent(list[index < 0 ? (step > 0 ? 0 : list.length - 1) : (index + step + list.length) % list.length])
+}
+
+// Keeps the match 80px inside the visible canvas, clear of the islands and the panel. Zoom changes only for unreadably small nodes.
+// Works from model coordinates: a node just shown from a collapsed branch has no settled DOM position yet.
+function revealSearchMatch(id) {
+  const node = nodesById.value.get(id)
+  const { width: canvasWidth, height: canvasHeight } = dimensions.value
+  if (!node || !canvasWidth) return
+  const width = node.dimensions?.width || DEFAULT_SIZE.width
+  const height = node.dimensions?.height || DEFAULT_SIZE.height
+  const transition = { duration: 250, ease: easeOut, interpolate: 'linear' }
+  const { x: viewX, y: viewY, zoom } = performance.now() < revealUntil ? revealCamera : viewport.value
+  if (height * zoom < 10) {
+    revealUntil = 0
+    setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, ...transition })
+    return
+  }
+  const margin = 80
+  const left = margin
+  const right = canvasWidth - (inspectorOpen.value ? INSPECTOR_SPACE : 0) - margin
+  const top = Math.max(margin, searchPlacement.value.top + 44 + 24)
+  const bottom = canvasHeight - margin
+  const box = { left: node.position.x * zoom + viewX, top: node.position.y * zoom + viewY }
+  box.right = box.left + width * zoom
+  box.bottom = box.top + height * zoom
+  const dx = shiftInto(left, right, box.left, box.right)
+  const dy = shiftInto(top, bottom, box.top, box.bottom)
+  if (!dx && !dy) return
+  revealCamera = { x: viewX + dx, y: viewY + dy, zoom }
+  revealUntil = performance.now() + transition.duration
+  setViewport(revealCamera, transition)
+}
+
+function onSearchKeydown(event) {
+  const mod = event.metaKey || event.ctrlKey
+  if (event.key === 'Enter' && mod) {
+    const id = searchCurrentId.value
+    if (id) focusEditor(id)
+    closeSearch()
+  } else if ((event.key === 'Enter' && event.shiftKey) || event.key === 'ArrowUp') stepSearch(-1)
+  else if (event.key === 'Enter' || event.key === 'ArrowDown') stepSearch(1)
+  else if (event.key === 'Escape') closeSearch()
+  else if (event.key === 'Tab') event.target.blur()
+  else if (findShortcut(event)?.id === 'search') event.target.select()
+  else return
+  event.preventDefault()
+}
+
+watch(searchQuery, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(flushSearch, 80)
+})
+
+// New query: start after the anchor node. Edits: keep the current match while it still matches.
+watch(searchMatches, (list) => {
+  if (!searchOpen.value) return
+  const termChanged = searchTerm.value !== searchedTerm
+  searchedTerm = searchTerm.value
+  if (!termChanged && list.includes(searchCurrentId.value)) return
+  setSearchCurrent(nextMatch(searchOrderIds.value, list, termChanged ? searchAnchorId : searchCurrentId.value))
+})
+
+// A node picked by the user becomes the new anchor; a matched one becomes current.
+watch(() => primaryNode.value?.id, (id) => {
+  if (!searchOpen.value || !id || id === searchCurrentId.value) return
+  searchAnchorId = id
+  if (searchMatches.value.includes(id)) setSearchCurrent(id)
+})
+
+// The query belongs to its map.
+watch(activeId, () => {
+  closeSearch()
+  searchQuery.value = ''
+  flushSearch()
+})
+watch(inspectorOpen, placeSearch)
 
 function connectNodes(connection) {
   if (!connection.source || !connection.target || connection.source === connection.target) return
@@ -705,14 +1042,14 @@ function attachGeometry(node, candidate) {
   const other = size(candidate)
   const side = node.position.x + own.w / 2 < candidate.position.x + other.w / 2 ? 'left' : 'right'
   const tree = settings.value.layout === 'tree'
-  const candidateOnLine = !candidate.data.root && nodeStyle(candidate.data) === 'line'
+  const candidateOnLine = !candidate.data.root && !imageOnly(candidate) && nodeStyle(candidate.data) === 'line'
   const x0 = tree
     ? candidate.position.x + (candidate.data.root ? 24 : 14)
     : candidate.position.x + (side === 'right' ? other.w : 0)
   const y0 = tree
     ? candidate.position.y + other.h - (candidateOnLine ? 1 : 0)
     : candidate.position.y + (candidateOnLine ? other.h - 1 : other.h / 2)
-  const ownOnLine = nodeStyle({ ...node.data, root: false }) === 'line'
+  const ownOnLine = !imageOnly(node) && nodeStyle({ ...node.data, root: false }) === 'line'
   const x1 = node.position.x + (tree || side === 'right' ? 0 : own.w)
   const y1 = node.position.y + (ownOnLine ? own.h - 1 : own.h / 2)
   const sourcePosition = tree ? Position.Bottom : side === 'right' ? Position.Right : Position.Left
@@ -720,7 +1057,7 @@ function attachGeometry(node, candidate) {
 }
 
 // The nearest node the dragged one will attach to: the one it was dropped on, or the closest within the radius.
-// The root attaches only on overlap — so moving a whole tree doesn't hang it off a neighbour.
+// A text root attaches only on overlap — so moving a whole tree doesn't hang it off a neighbour.
 function findAttachTarget(node, dragged = [node]) {
   const excluded = new Set(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
   const center = {
@@ -734,7 +1071,7 @@ function findAttachTarget(node, dragged = [node]) {
     const height = candidate.dimensions?.height || 30
     const overlap = center.x >= candidate.position.x && center.x <= candidate.position.x + width
       && center.y >= candidate.position.y && center.y <= candidate.position.y + height
-    if (node.data.root && !overlap) continue
+    if (node.data.root && !imageOnly(node) && !overlap) continue
     const geometry = attachGeometry(node, candidate)
     const snapsToRoot = candidate.data.root && geometry.distance <= ROOT_SNAP
     const distance = snapsToRoot ? -1 : overlap ? 0 : geometry.distance * (candidate.data.root ? ROOT_PULL : 1)
@@ -746,14 +1083,33 @@ function findAttachTarget(node, dragged = [node]) {
 
 const dragPreview = ref(null)
 
+function findMergeTarget(node, dragged) {
+  if (!imageOnly(node)) return null
+  const draggedIds = new Set(dragged.map((item) => item.id))
+  const center = {
+    x: node.position.x + (node.dimensions?.width || 180) / 2,
+    y: node.position.y + (node.dimensions?.height || 30) / 2,
+  }
+  for (const candidate of nodes.value) {
+    if (draggedIds.has(candidate.id) || candidate.hidden || !candidate.data.label?.trim()) continue
+    const width = candidate.dimensions?.width || 180
+    const height = candidate.dimensions?.height || 30
+    if (center.x < candidate.position.x || center.x > candidate.position.x + width
+      || center.y < candidate.position.y || center.y > candidate.position.y + height) continue
+    return { target: candidate, overlap: true, ...attachGeometry(node, candidate), distance: 0 }
+  }
+  return null
+}
+
 function showAttachPreview(node, dragged) {
   const parentId = parentOf.value.get(node.id)
   const parentEdge = edges.value.find((edge) => edge.data?.kind === 'tree' && edge.target === node.id)
-  const best = movedFromOrigin(node) ? findAttachTarget(node, dragged) : null
-  const changes = best && best.target.id !== parentId
+  const best = movedFromOrigin(node) ? findMergeTarget(node, dragged) ?? findAttachTarget(node, dragged) : null
+  const mode = imageOnly(node) && best?.overlap && best.target.data.label?.trim() ? 'merge' : 'attach'
+  const changes = best && (mode === 'merge' || best.target.id !== parentId)
   // Preview only: the real link doesn't change until release.
   dragPreview.value = changes
-    ? { targetId: best.target.id, path: best.path, overlap: best.overlap, color: best.target.data.root ? node.data.color : best.target.data.color }
+    ? { mode, targetId: best.target.id, path: best.path, overlap: best.overlap, color: best.target.data.root ? node.data.color : best.target.data.color }
     : null
   dropTargetId.value = changes ? best.target.id : null
   if (parentEdge) parentEdge.hidden = Boolean(changes)
@@ -829,8 +1185,40 @@ function onNodeDragStop({ node }) {
     dragStart = null
     return
   }
-  dragBranch = null
   const target = preview ? nodesById.value.get(preview.targetId) : null
+  if (target && preview.mode === 'merge') {
+    const merged = mergeImageNode(nodes.value, edges.value, node.id, target.id)
+    if (merged.error) {
+      if (origin) {
+        dragOrigin = origin
+        moveBranch(node, true)
+        node.position = origin
+        updateSides([node.id, ...descendantsOf(node.id, edges.value)])
+        dragOrigin = null
+      }
+      dragBranch = null
+      dragStart = null
+      applyVisibility()
+      notify(merged.error === 'target-has-image'
+        ? 'This block already has an image'
+        : merged.error === 'cycle' ? 'This image cannot be merged into its own branch' : 'Image could not be added')
+      return
+    }
+    nodes.value = merged.nodes
+    edges.value = merged.edges
+    const mergedTarget = nodes.value.find((item) => item.id === target.id)
+    mergedTarget.data.collapsed = false
+    selectOnly(target.id)
+    dragBranch = null
+    orient()
+    if (autoLayout.value) relayout(false)
+    applyVisibility()
+    record(dragStart)
+    dragStart = null
+    notify(`Image added to “${nodeLabel(mergedTarget)}”`)
+    return
+  }
+  dragBranch = null
   if (target) {
     edges.value = edges.value.filter((edge) => edge.data?.kind !== 'tree' || edge.target !== node.id)
     edges.value.push(makeEdge(target.id, node.id))
@@ -849,7 +1237,7 @@ function onNodeDragStop({ node }) {
     }
     orient()
     target.data.collapsed = false
-    notify(`Moved “${node.data.label}” to “${target.data.label}”`)
+    notify(`Moved “${nodeLabel(node)}” to “${nodeLabel(target)}”`)
   } else if (autoLayout.value) {
     // The node was moved by hand — layout no longer puts it back.
     autoLayout.value = false
@@ -1127,21 +1515,35 @@ function switchDocument(id, { keepMenu = false } = {}) {
 function addDocument(map) {
   finishEditing()
   clearTimeout(saveTimer)
-  persistDocuments(false)
+  if (!persistDocuments(false)) return false
+  const previousId = activeId.value
+  const previousHistory = history.value
+  const previousFuture = future.value
   const id = documentId()
   documents.value.push({ id, map: normalizeMap(map), updatedAt: Date.now() })
   activeId.value = id
   openMap(map)
   history.value = []
   future.value = []
-  persistDocuments()
+  if (!persistDocuments()) {
+    documents.value = documents.value.filter((document) => document.id !== id)
+    activeId.value = previousId
+    openMap(documents.value.find((document) => document.id === previousId).map)
+    history.value = previousHistory
+    future.value = previousFuture
+    return false
+  }
   requestFocus()
+  return true
 }
 
 function newMap() {
   closeMenus()
   const root = makeNode('Central idea', { x: 0, y: 0 }, { root: true, color: PALETTES.bright.colors[0] })
-  addDocument({ version: 1, title: 'New map', autoLayout: true, nodes: [root], edges: [] })
+  if (!addDocument({ version: 1, title: 'New map', autoLayout: true, nodes: [root], edges: [] })) {
+    notify('The map could not be saved on this device.')
+    return
+  }
   selectOnly(root.id)
   focusEditor(root.id)
 }
@@ -1231,32 +1633,69 @@ function undoDeletion() {
   setTimeout(() => flashDocId.value === pending.document.id && (flashDocId.value = null), 1500)
 }
 
-function exportMap(format) {
-  exportOpen.value = false
-  const opml = format === 'opml'
-  const content = opml ? toOpml(cleanMap()) : JSON.stringify(cleanMap(), null, 2)
-  const blob = new Blob([content], { type: opml ? 'text/x-opml' : 'application/json' })
+function download(blob, extension) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `${(title.value || 'mind-map').replace(/[^\p{L}\p{N}_-]+/gu, '-')}.${opml ? 'opml' : 'mindmap'}`
+  link.download = `${(title.value || 'mind-map').replace(/[^\p{L}\p{N}_-]+/gu, '-')}.${extension}`
   link.click()
   URL.revokeObjectURL(url)
-  notify(opml ? 'OPML saved' : 'Map file saved')
+}
+
+async function exportMap(format) {
+  if (exportBusy.value) return
+  exportOpen.value = false
+  const opml = format === 'opml'
+  const map = cleanMap()
+  if (opml) {
+    download(new Blob([toOpml(map)], { type: 'text/x-opml' }), 'opml')
+    notify(referencedAssetIds(map).size ? 'OPML saved — images were exported as text only' : 'OPML saved')
+    return
+  }
+  exportBusy.value = true
+  try {
+    download(await createMindmapFile(map, loadImageAsset), 'mindmap')
+    notify('Map file saved')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Could not export the map')
+  } finally {
+    exportBusy.value = false
+  }
 }
 
 async function loadFile(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
   if (!file) return
+  let importedAssetIds = []
   try {
-    const text = await file.text()
-    const map = file.name.toLowerCase().endsWith('.opml') || text.trimStart().startsWith('<')
-      ? parseOpml(text)
-      : normalizeMap(JSON.parse(text))
-    addDocument(map)
+    const imported = await readMindmapFile(file)
+    let map
+    if (imported.kind === 'archive') {
+      const assets = []
+      for (const asset of imported.assets) {
+        let decoded
+        try {
+          decoded = await createImageAsset(new File([asset.blob], asset.image.name, { type: asset.image.mime }), asset.image.assetId)
+        } catch {
+          throw new Error('The map archive is incomplete or corrupted.')
+        }
+        if (decoded.image.naturalWidth !== asset.image.naturalWidth || decoded.image.naturalHeight !== asset.image.naturalHeight) {
+          throw new Error('The map archive is incomplete or corrupted.')
+        }
+        assets.push(decoded)
+      }
+      await saveImageAssets(assets)
+      importedAssetIds = assets.map((asset) => asset.image.assetId)
+      map = imported.map
+    } else {
+      map = imported.kind === 'opml' ? parseOpml(imported.text) : normalizeMap(JSON.parse(imported.text))
+    }
+    if (!addDocument(map)) throw new Error('The map could not be saved on this device.')
+    importedAssetIds = []
     notify(`Added: ${file.name}`)
   } catch (error) {
+    if (importedAssetIds.length) await deleteImageAssets(importedAssetIds).catch(() => {})
     notify(error instanceof Error ? error.message : 'Could not open the file')
   }
 }
@@ -1382,6 +1821,16 @@ function onKeydown(event) {
     }
     return
   }
+  if (shortcut?.id === 'search') {
+    event.preventDefault()
+    openSearch()
+    return
+  }
+  if (event.key === 'Escape' && searchOpen.value && !contextMenu.value && !documentsOpen.value && !appMenuOpen.value && !exportOpen.value) {
+    event.preventDefault()
+    closeSearch()
+    return
+  }
   if (shortcut?.id === 'undo' && deletion.value) {
     event.preventDefault()
     undoDeletion()
@@ -1421,6 +1870,8 @@ function onNodesChange(changes) {
   const dimensionChanges = changes.filter((change) => change.type === 'dimensions')
   if (!dimensionChanges.length) return
   const revealId = dimensionChanges.some((change) => change.id === pendingRevealId) ? pendingRevealId : null
+  // A match shown from a collapsed branch gets its real size only now.
+  const searchId = dimensionChanges.some((change) => change.id === searchCurrentId.value) ? searchCurrentId.value : null
   for (const change of dimensionChanges) {
     const node = nodes.value.find((item) => item.id === change.id)
     const height = change.dimensions?.height ?? node?.dimensions?.height
@@ -1433,6 +1884,7 @@ function onNodesChange(changes) {
   }
   if (!autoLayout.value && !pendingLayout && !pendingFocus) {
     if (revealId) revealAfterMeasurement(revealId)
+    if (searchId) revealSearchMatch(searchId)
     return
   }
   cancelAnimationFrame(layoutFrame)
@@ -1445,6 +1897,7 @@ function onNodesChange(changes) {
     }
     flushFocus()
     if (revealId) revealAfterMeasurement(revealId)
+    if (searchId) revealSearchMatch(searchId)
   })
 }
 
@@ -1473,9 +1926,17 @@ watch([nodes, edges, title, autoLayout, settings], () => {
 onMounted(() => {
   applyVisibility()
   persistDocuments()
+  hydrateImageUrls()
+  const usedAssets = new Set()
+  for (const document of documents.value) {
+    for (const assetId of referencedAssetIds(document.map)) usedAssets.add(assetId)
+  }
+  pruneImageAssets(usedAssets).catch(() => {})
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
+  window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
+  window.addEventListener('resize', placeSearch)
   clockTimer = setInterval(() => (now.value = Date.now()), 60000)
   showShortcutsTip()
 })
@@ -1493,7 +1954,9 @@ function showShortcutsTip() {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
+  window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
+  window.removeEventListener('resize', placeSearch)
   persistDocuments(false)
   clearTimeout(saveTimer)
   clearTimeout(toastTimer)
@@ -1501,13 +1964,14 @@ onBeforeUnmount(() => {
   clearInterval(clockTimer)
   cancelAnimationFrame(layoutFrame)
   clearTimeout(focusTimer)
+  clearImageUrls()
 })
 </script>
 
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle }">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }" @dragover.prevent @drop.prevent="onImageDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -1539,7 +2003,9 @@ onBeforeUnmount(() => {
           @pane-click="closeOverlays"
         >
           <template #edge-branch="edge">
-            <BaseEdge :id="edge.id" :path="branchPath(edge)" :style="edge.style" :interaction-width="12" />
+            <g class="branch-edge" :class="{ 'search-path': searchMarks.has(edge.target) }">
+              <BaseEdge :id="edge.id" :path="branchPath(edge)" :style="edge.style" :interaction-width="12" />
+            </g>
           </template>
 
           <template #node-mind="{ id, data, selected }">
@@ -1549,16 +2015,31 @@ onBeforeUnmount(() => {
               :class="[`style-${nodeStyle(data)}`, `side-${data.side}`, `kids-${childrenSide(id, data)}`, {
                 selected,
                 root: data.root,
+                'image-only': data.image && !data.label,
                 deep: (depths.get(id) ?? 0) > 2,
                 editing: editingId === id,
                 collapsed: data.collapsed,
                 'drop-target': dropTargetId === id,
+                'merge-target': dropTargetId === id && dragPreview?.mode === 'merge',
+                'search-match': searchState(id) === 'match' || searchState(id) === 'current',
+                'search-current': searchState(id) === 'current',
               }]"
               :style="{ '--branch': data.color }"
               :aria-current="selected ? 'true' : undefined"
+              :aria-label="data.label || data.image?.name"
+              tabindex="-1"
             >
               <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" />
               <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" title="Drag to link to another node" />
+              <img
+                v-if="data.image && imageUrls.get(data.image.assetId)"
+                class="node-image"
+                :src="imageUrls.get(data.image.assetId)"
+                :alt="data.label ? '' : data.image.name"
+                draggable="false"
+                @dblclick.stop="openImagePreview(id)"
+              />
+              <span v-else-if="data.image" class="image-placeholder">{{ data.image.name }}</span>
               <div
                 v-if="editingId === id"
                 class="node-editor nodrag nopan"
@@ -1592,8 +2073,8 @@ onBeforeUnmount(() => {
                 />
               </div>
               <template v-else>
-                <span class="node-title">{{ data.label }}</span>
-                <span v-if="data.note" class="node-note">{{ data.note }}</span>
+                <span v-if="data.label" class="node-title"><template v-for="(part, index) in searchParts(id, data.label)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="data.note" class="node-note"><template v-for="(part, index) in searchParts(id, data.note)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
               </template>
               <button
                 v-if="hasChildren(id)"
@@ -1612,7 +2093,7 @@ onBeforeUnmount(() => {
           </template>
         </VueFlow>
 
-        <div class="island document-island" @click.stop>
+        <div ref="documentIsland" class="island document-island" @click.stop>
           <button
             ref="brandButton"
             class="brand-mark"
@@ -1781,8 +2262,51 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="top-right" @click.stop>
+        <Transition name="search">
+          <div
+            v-if="searchOpen"
+            class="island search-island"
+            role="search"
+            :style="{ top: `${searchPlacement.top}px`, width: `${searchPlacement.width}px` }"
+            @click.stop
+          >
+            <svg class="search-icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+            <input
+              ref="searchInput"
+              v-model="searchQuery"
+              name="map-search"
+              placeholder="Find on map"
+              aria-label="Find on map"
+              autocomplete="off"
+              @keydown="onSearchKeydown"
+            />
+            <span v-if="searchTerm" class="search-count" :class="{ empty: !searchMatches.length }" aria-live="polite">{{ searchCount }}</span>
+            <button class="search-button" :disabled="!searchMatches.length" :title="`Previous · ${keyLabel('Shift')} Enter`" aria-label="Previous match" @click="stepSearch(-1)">
+              <svg viewBox="0 0 16 16"><path d="M4 10l4-4 4 4"/></svg>
+            </button>
+            <button class="search-button" :disabled="!searchMatches.length" title="Next · Enter" aria-label="Next match" @click="stepSearch(1)">
+              <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
+            </button>
+            <span class="divider"></span>
+            <button class="search-button" title="Close · Esc" aria-label="Close search" @click="closeSearch">
+              <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+            </button>
+          </div>
+        </Transition>
+
+        <div ref="topRight" class="top-right" @click.stop>
           <div class="island action-island">
+            <button
+              class="island-icon search-toggle"
+              :class="{ active: searchOpen }"
+              :aria-pressed="searchOpen"
+              :title="`Search · ${keysLabel('search')}`"
+              aria-label="Search"
+              @click="searchOpen ? closeSearch() : openSearch()"
+            >
+              <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+            </button>
+            <span class="divider"></span>
             <button class="island-icon" :disabled="!history.length" :title="`Undo (${keysLabel('undo')})`" aria-label="Undo" @click="undo">
               <svg viewBox="0 0 16 16"><path d="M5.5 4L2.5 7l3 3"/><path d="M2.5 7h7a4 4 0 010 8H8"/></svg>
             </button>
@@ -1791,8 +2315,8 @@ onBeforeUnmount(() => {
             </button>
             <span class="divider"></span>
             <div class="export-wrap">
-              <button class="export-button" :aria-expanded="exportOpen" aria-haspopup="menu" @click="toggleExport">
-                Export
+              <button class="export-button" :disabled="exportBusy" :aria-expanded="exportOpen" aria-haspopup="menu" @click="toggleExport">
+                {{ exportBusy ? 'Exporting…' : 'Export' }}
                 <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
               </button>
               <div v-if="exportOpen" class="island-menu export-menu" role="menu">
@@ -1814,7 +2338,7 @@ onBeforeUnmount(() => {
         </div>
         <input ref="fileInput" class="visually-hidden" name="map-file" aria-label="Open map file" type="file" accept=".mindmap,.json,.opml,application/json,text/xml" @change="loadFile" />
 
-        <svg v-if="dragPreview" class="attach-preview" aria-hidden="true">
+        <svg v-if="dragPreview?.mode === 'attach'" class="attach-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
             <path :d="dragPreview.path" :stroke="dragPreview.color" />
           </g>
@@ -1844,7 +2368,7 @@ onBeforeUnmount(() => {
         <header class="inspector-head">
           <div class="inspector-title">
             <span>{{ inspectorMode === 'map' ? 'Map' : inspectorMode === 'multi' ? 'Selection' : nodePath }}</span>
-            <strong>{{ inspectorMode === 'map' ? title : inspectorMode === 'multi' ? pluralNodes(selectedCount) : primaryNode.data.label }}</strong>
+            <strong>{{ inspectorMode === 'map' ? title : inspectorMode === 'multi' ? pluralNodes(selectedCount) : primaryNode.data.label || primaryNode.data.image?.name }}</strong>
           </div>
           <button v-if="inspectorMode === 'multi'" class="inspector-text-button" @click="clearSelection">Clear</button>
           <button v-else class="inspector-close" title="Close panel" aria-label="Close panel" @click="inspectorOpen = false">
@@ -1854,7 +2378,13 @@ onBeforeUnmount(() => {
 
         <div ref="inspectorBody" class="inspector-body">
           <template v-if="inspectorMode === 'node'">
-            <section class="panel-section">
+            <section v-if="primaryNode.data.image" class="panel-section">
+              <h3>Image</h3>
+              <p class="panel-hint">{{ primaryNode.data.image.name }}</p>
+              <button v-if="primaryNode.data.label" class="panel-image-remove" @click="removeEmbeddedImage(primaryNode)">Remove image</button>
+            </section>
+
+            <section v-if="primaryNode.data.label" class="panel-section">
               <h3>Text</h3>
               <input
                 class="panel-input title-input"
@@ -1996,7 +2526,7 @@ onBeforeUnmount(() => {
       <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }">
         <button @click="addChild(contextMenu.id)"><span>＋</span>Child node <kbd>{{ keysLabel('addChild') }}</kbd></button>
         <button @click="addSibling"><span>↳</span>Sibling node <kbd>{{ keysLabel('addSibling') }}</kbd></button>
-        <button @click="focusEditor(contextMenu.id); contextMenu = null"><span>✎</span>Edit</button>
+        <button @click="focusEditor(contextMenu.id); contextMenu = null"><span>✎</span>{{ imageOnly(nodes.find((node) => node.id === contextMenu.id)) ? 'Preview' : 'Edit' }}</button>
         <button v-if="hasChildren(contextMenu.id)" @click="toggleCollapse(contextMenu.id); contextMenu = null"><span>⌁</span>Collapse / expand</button>
         <hr />
         <button class="danger" :disabled="nodes.find((node) => node.id === contextMenu.id)?.data.root && rootCount === 1" @click="removeSelected"><span>⌫</span>Delete branch</button>
@@ -2016,6 +2546,11 @@ onBeforeUnmount(() => {
         </div>
         <div v-else-if="toast" class="toast" :class="{ 'undo-toast': toastTip }" role="status">{{ toast }}</div>
       </Transition>
+
+      <dialog v-if="imagePreview" ref="imageDialog" class="image-preview" aria-label="Image preview" @close="onImagePreviewClosed" @click.self="closeImagePreview">
+        <button class="image-preview-close" aria-label="Close image preview" @click="closeImagePreview">×</button>
+        <img :src="imagePreview.src" :alt="imagePreview.name" />
+      </dialog>
 
       <Transition name="help">
         <div v-if="helpOpen" class="help-backdrop" @click="closeHelp">

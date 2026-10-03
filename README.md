@@ -7,10 +7,11 @@ A local mind-mapping app built with Vue 3 and Vue Flow. Everything runs in the b
 - **Several maps.** Create, rename, duplicate, delete and search maps from the switcher next to the map title. A deleted map can be restored from the notification.
 - **Editing.** Add child and sibling nodes, edit text in place, and add a gray second line for details such as a price or a note. Collapse and expand branches, select several nodes at once, and draw free links between any two nodes by dragging from a node's edge.
 - **Drag to reattach.** Drag a node or a branch onto another node to move it there. While you drag, a preview line shows where it will attach.
+- **Images.** Paste or drop PNG, JPEG, WebP and GIF files up to 2 MB onto the canvas. An image starts as a free block that can have children; drop it onto a text node to make it part of that node, or double-click it for a full-size preview.
 - **Layout.** Turn on auto layout and choose a direction (right, both sides or tree), smooth or straight lines, and the spacing. With auto layout off, nodes stay where you put them.
 - **Inspector panel.** Change a node's text, branch color and style (line, card or text), or change map-wide settings such as the branch palette (Bright, Calm or Mono).
 - **Undo and redo** for every change.
-- **Import and export.** Download a map as a `.mindmap` file (JSON) or as an OPML outline. Open `.mindmap`, `.json` and `.opml` files as new maps.
+- **Import and export.** Download a map as a `.mindmap` file or as an OPML outline. Image maps use a ZIP-backed `.mindmap`; maps without images and older `.mindmap`/`.json` files remain plain JSON. OPML keeps the text tree and represents image-only nodes as `[Image]`.
 - **Keyboard shortcuts.** Press <kbd>?</kbd> to see them all.
 - **App menu.** The menu shows the app version (click to copy it) and links to the release notes and to the issue tracker.
 
@@ -18,7 +19,7 @@ First-time visitors see a short welcome map that demonstrates the main features.
 
 ## Storage
 
-Maps live in the browser's `localStorage` under the `mindspace-library-v1` key. Clearing site data removes them, so export the maps you want to keep. Maps saved by older versions under `mindspace-map-v1` are migrated automatically.
+Maps live in the browser's `localStorage` under the `mindspace-library-v1` key, while image blobs are stored separately in IndexedDB under `mindspace-assets-v1`. Clearing site data removes both, so export the maps you want to keep. Maps saved by older versions under `mindspace-map-v1` are migrated automatically.
 
 ## Development
 
@@ -37,6 +38,7 @@ The app version and repository URL come from `package.json` and appear in the ap
 
 - `src/App.vue`: the app UI, including the canvas, toolbars, inspector, menus and dialogs.
 - `src/model.js`: the map model, covering normalization, layout, palettes, OPML import and export, and the welcome map.
+- `src/assets.js` and `src/archive.js`: local image storage and `.mindmap` archive import/export.
 - `src/shortcuts.js`: the keyboard shortcut registry used by the key handlers and the help dialog.
 - `src/style.css`: styles.
 - `test/`: unit tests for the model and shortcuts.

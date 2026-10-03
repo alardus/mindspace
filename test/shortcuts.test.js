@@ -16,6 +16,9 @@ test('keydown events resolve to registry entries', () => {
   assert.equal(findShortcut(key({ key: '?', shiftKey: true, code: 'Slash' })).id, 'help')
   // Russian layout: Shift+/ types a comma.
   assert.equal(findShortcut(key({ key: ',', shiftKey: true, code: 'Slash' })).id, 'help')
+  assert.equal(findShortcut(key({ key: 'f', metaKey: true })).id, 'search')
+  // Russian layout: Cmd+F types “а”.
+  assert.equal(findShortcut(key({ key: 'а', code: 'KeyF', ctrlKey: true })).id, 'search')
   assert.equal(findShortcut(key({ key: 'a' })), undefined)
 })
 

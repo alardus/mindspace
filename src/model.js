@@ -47,12 +47,29 @@ export const branchColor = (index, palette = 'bright') => paletteColors(palette)
 const normalizeColor = (color) => (ALL_COLORS.has(color) ? color : LEGACY_COLORS[color] ?? COLORS[0])
 
 export const NODE_STYLES = ['line', 'card', 'text']
+export const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 // Default style depends on role: root is a card, a branch is text on a line.
 export const nodeStyle = (data) => (NODE_STYLES.includes(data.style) ? data.style : data.root ? 'card' : 'line')
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
-export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
+export function normalizeImageReference(value) {
+  if (!value || typeof value !== 'object'
+    || typeof value.assetId !== 'string' || !value.assetId.trim()
+    || typeof value.name !== 'string' || !value.name.trim()
+    || !IMAGE_MIME_TYPES.has(value.mime)
+    || !Number.isFinite(value.naturalWidth) || value.naturalWidth <= 0
+    || !Number.isFinite(value.naturalHeight) || value.naturalHeight <= 0) return null
   return {
+    assetId: value.assetId,
+    name: value.name.slice(0, 255),
+    mime: value.mime,
+    naturalWidth: value.naturalWidth,
+    naturalHeight: value.naturalHeight,
+  }
+}
+
+export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
+  const node = {
     id: options.id ?? uid(),
     type: 'mind',
     position,
@@ -67,6 +84,13 @@ export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
       side: options.side === 'left' || options.side === 'right' ? options.side : 'root',
     },
   }
+  const image = normalizeImageReference(options.image)
+  if (image) node.data.image = image
+  return node
+}
+
+export function referencedAssetIds(map) {
+  return new Set(map?.nodes?.flatMap((node) => node.data?.image?.assetId ? [node.data.image.assetId] : []) ?? [])
 }
 
 export function makeEdge(source, target, kind = 'tree', id = uid()) {
@@ -112,6 +136,28 @@ export function descendantsOf(id, edges) {
     queue.push(...(children.get(child) ?? []))
   }
   return found
+}
+
+export function mergeImageNode(nodes, edges, sourceId, targetId) {
+  const source = nodes.find((node) => node.id === sourceId)
+  const target = nodes.find((node) => node.id === targetId)
+  const fail = (error) => ({ nodes, edges, error })
+  if (!source?.data?.image || source.data.label?.trim() || !target?.data?.label?.trim()) return fail('invalid-source')
+  if (target.data.image) return fail('target-has-image')
+  if (descendantsOf(sourceId, edges).has(targetId)) return fail('cycle')
+
+  return {
+    error: null,
+    nodes: nodes
+      .filter((node) => node.id !== sourceId)
+      .map((node) => node.id === targetId ? { ...node, data: { ...node.data, image: source.data.image } } : node),
+    edges: edges.flatMap((edge) => {
+      if (edge.data?.kind === 'link' && (edge.source === sourceId || edge.target === sourceId)) return []
+      if (edge.data?.kind === 'tree' && edge.target === sourceId) return []
+      if (edge.data?.kind === 'tree' && edge.source === sourceId) return [{ ...edge, source: targetId }]
+      return [edge]
+    }),
+  }
 }
 
 // Pick the visually nearest node in an arrow-key direction. This follows the
@@ -305,13 +351,18 @@ export function normalizeMap(input) {
   const nodes = input.nodes.map((node, index) => {
     const id = typeof node?.id === 'string' && node.id && !ids.has(node.id) ? node.id : uid()
     ids.add(id)
+    const image = normalizeImageReference(node?.data?.image)
+    const label = typeof node?.data?.label === 'string'
+      ? node.data.label.slice(0, 500)
+      : input.version === 3 && image ? '' : `Idea ${index + 1}`
+    if (input.version === 3 && !label.trim() && !image) throw new Error('The map contains an empty block')
     return makeNode(
-      typeof node?.data?.label === 'string' ? node.data.label.slice(0, 500) : `Idea ${index + 1}`,
+      label,
       {
         x: Number.isFinite(node?.position?.x) ? node.position.x : 0,
         y: Number.isFinite(node?.position?.y) ? node.position.y : index * 112,
       },
-      { id, ...node.data },
+      { id, ...node.data, image },
     )
   })
   const edges = input.edges
@@ -330,7 +381,7 @@ export function normalizeMap(input) {
   const settings = normalizeSettings(input.settings)
   orientEdges(nodes, edges, settings.layout)
   const map = {
-    version: 2,
+    version: nodes.some((node) => node.data.image) ? 3 : 2,
     title: typeof input.title === 'string' ? input.title.slice(0, 100) : 'Untitled',
     autoLayout: Boolean(input.autoLayout),
     settings,
@@ -338,7 +389,7 @@ export function normalizeMap(input) {
     edges,
   }
   // Positions from pre-redesign maps assume fixed-width nodes — they need a one-time re-layout.
-  if (input.version !== 2) Object.defineProperty(map, 'needsLayout', { value: true })
+  if (input.version !== 2 && input.version !== 3) Object.defineProperty(map, 'needsLayout', { value: true })
   return map
 }
 
@@ -386,7 +437,7 @@ export function toOpml(map) {
     visited.add(id)
     const pad = '  '.repeat(depth)
     const inner = (children.get(id) ?? []).map((child) => outline(child, depth + 1)).join('')
-    const attributes = `text="${escapeXml(node.data.label)}"${node.data.note ? ` _note="${escapeXml(node.data.note)}"` : ''}`
+    const attributes = `text="${escapeXml(node.data.label || (node.data.image ? '[Image]' : 'Untitled'))}"${node.data.note ? ` _note="${escapeXml(node.data.note)}"` : ''}`
     return inner ? `${pad}<outline ${attributes}>\n${inner}${pad}</outline>\n` : `${pad}<outline ${attributes}/>\n`
   }
   const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => outline(node.id, 2)).join('')
@@ -484,4 +535,54 @@ export function starterMap() {
   const map = { version: 2, title: 'Welcome to Mindspace', autoLayout: true, nodes, edges }
   map.nodes = layoutNodes(map.nodes, map.edges)
   return map
+}
+
+// Map search: case-insensitive, ё matches е. Both keep string length, so match offsets map back to the original text.
+export const normalizeSearch = (text) => text.toLowerCase().replaceAll('ё', 'е')
+
+// Depth-first in visual order: roots top to bottom (then left to right), children top to bottom.
+export function searchOrder(nodes, edges) {
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const children = new Map()
+  const hasParent = new Set()
+  for (const edge of edges) {
+    if (edge.data?.kind !== 'tree' || !byId.has(edge.source) || !byId.has(edge.target)) continue
+    if (!children.has(edge.source)) children.set(edge.source, [])
+    children.get(edge.source).push(byId.get(edge.target))
+    hasParent.add(edge.target)
+  }
+  const visual = (a, b) => a.position.y - b.position.y || a.position.x - b.position.x
+  const order = []
+  const seen = new Set()
+  const visit = (node) => {
+    if (seen.has(node.id)) return
+    seen.add(node.id)
+    order.push(node.id)
+    ;[...(children.get(node.id) ?? [])].sort(visual).forEach(visit)
+  }
+  nodes.filter((node) => !hasParent.has(node.id)).sort(visual).forEach(visit)
+  nodes.forEach(visit)
+  return order
+}
+
+// The first match after anchorId in search order, wrapping around.
+export function nextMatch(order, matches, anchorId) {
+  const position = new Map(order.map((id, at) => [id, at]))
+  const from = position.get(anchorId) ?? -1
+  return matches.find((id) => position.get(id) > from) ?? matches[0] ?? null
+}
+
+// Splits text into plain and matched parts; no empty parts.
+export function highlightParts(text, term) {
+  const haystack = normalizeSearch(text)
+  if (!term || haystack.length !== text.length) return [{ text, match: false }]
+  const parts = []
+  let from = 0
+  for (let at = haystack.indexOf(term); at >= 0; at = haystack.indexOf(term, from)) {
+    if (at > from) parts.push({ text: text.slice(from, at), match: false })
+    from = at + term.length
+    parts.push({ text: text.slice(at, from), match: true })
+  }
+  if (from < text.length) parts.push({ text: text.slice(from), match: false })
+  return parts
 }
