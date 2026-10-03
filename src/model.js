@@ -142,6 +142,15 @@ export function descendantsOf(id, edges) {
   return found
 }
 
+export function rigidRootBranch(node, dragged, edges) {
+  if (!node?.data?.root || dragged.length !== 1) return null
+  const nodeIds = [node.id, ...descendantsOf(node.id, edges)]
+  if (nodeIds.length === 1) return null
+  const branch = new Set(nodeIds)
+  if (edges.some((edge) => branch.has(edge.source) !== branch.has(edge.target))) return null
+  return { nodeIds, edgeIds: edges.filter((edge) => branch.has(edge.source)).map((edge) => edge.id) }
+}
+
 export function mergeImageNode(nodes, edges, sourceId, targetId) {
   const source = nodes.find((node) => node.id === sourceId)
   const target = nodes.find((node) => node.id === targetId)

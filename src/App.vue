@@ -31,6 +31,7 @@ import {
   recolorForPalette,
   referencedAssetIds,
   relativeTime,
+  rigidRootBranch,
   searchOrder,
   shiftNodesBelow,
   snapNode,
@@ -207,6 +208,7 @@ let clockTimer
 let dirty = false
 let dragOrigin = null
 let dragBranch = null
+let rigidDrag = null
 let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
@@ -1056,14 +1058,25 @@ function connectNodes(connection) {
   record(before)
 }
 
-function onNodeDragStart({ node }) {
-  alignmentGuides.value = []
+function onNodeDragStart({ node, nodes: dragged = [node] }) {
+  if (alignmentGuides.value.length) alignmentGuides.value = []
   dragStart = snapshot()
   dragOrigin = { ...node.position }
+  const descendants = descendantsOf(node.id, edges.value)
   // The branch moves with its parent; Vue Flow moves selected descendants itself.
   dragBranch = new Map(nodes.value
-    .filter((item) => descendantsOf(node.id, edges.value).has(item.id) && !item.selected)
+    .filter((item) => descendants.has(item.id) && !item.selected)
     .map((item) => [item.id, { item, origin: { ...item.position } }]))
+  const rigid = rigidRootBranch(node, dragged, edges.value)
+  if (rigid) {
+    const selector = (kind, id) => `.${kind}[data-id="${CSS.escape(id)}"]`
+    const elements = [
+      ...rigid.nodeIds.map((id) => document.querySelector(selector('vue-flow__node', id))),
+      ...rigid.edgeIds.map((id) => document.querySelector(selector('vue-flow__edge', id))),
+    ].filter(Boolean)
+    for (const element of elements) element.style.translate = 'var(--branch-drag-x) var(--branch-drag-y)'
+    rigidDrag = { elements, dx: 0, dy: 0, rawPosition: dragOrigin }
+  }
 }
 
 function moveBranch(node, restore = false) {
@@ -1071,6 +1084,27 @@ function moveBranch(node, restore = false) {
   const dx = restore ? 0 : node.position.x - dragOrigin.x
   const dy = restore ? 0 : node.position.y - dragOrigin.y
   for (const { item, origin } of dragBranch.values()) item.position = { x: origin.x + dx, y: origin.y + dy }
+}
+
+function moveRigidBranch(node) {
+  rigidDrag.dx = node.position.x - dragOrigin.x
+  rigidDrag.dy = node.position.y - dragOrigin.y
+  canvasElement.value.style.setProperty('--branch-drag-x', `${rigidDrag.dx}px`)
+  canvasElement.value.style.setProperty('--branch-drag-y', `${rigidDrag.dy}px`)
+  node.position = dragOrigin
+}
+
+function commitRigidBranch(node) {
+  if (!rigidDrag) return false
+  node.position = { x: dragOrigin.x + rigidDrag.dx, y: dragOrigin.y + rigidDrag.dy }
+  for (const { item, origin } of dragBranch.values()) {
+    item.position = { x: origin.x + rigidDrag.dx, y: origin.y + rigidDrag.dy }
+  }
+  for (const element of rigidDrag.elements) element.style.removeProperty('translate')
+  canvasElement.value.style.removeProperty('--branch-drag-x')
+  canvasElement.value.style.removeProperty('--branch-drag-y')
+  rigidDrag = null
+  return true
 }
 
 function setAutoLayout(value) {
@@ -1219,7 +1253,8 @@ function updateSides(ids) {
 }
 
 function onNodeDrag({ event, node, nodes: dragged = [node] }) {
-  alignmentGuides.value = []
+  const rawPosition = rigidDrag ? { ...node.position } : null
+  if (alignmentGuides.value.length) alignmentGuides.value = []
   if (event.shiftKey) {
     const excluded = new Set(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
     const rectOf = (item) => ({
@@ -1239,6 +1274,12 @@ function onNodeDrag({ event, node, nodes: dragged = [node] }) {
     for (const item of dragged) item.position = { x: item.position.x + dx, y: item.position.y + dy }
     alignmentGuides.value = snapped.guides
   }
+  if (rigidDrag) {
+    rigidDrag.rawPosition = rawPosition
+    showAttachPreview(node, dragged)
+    moveRigidBranch(node)
+    return
+  }
   moveBranch(node)
   updateSides(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
   showAttachPreview(node, dragged)
@@ -1247,8 +1288,11 @@ function onNodeDrag({ event, node, nodes: dragged = [node] }) {
 function onNodeDragStop(payload) {
   const { node } = payload
   // Vue Flow restores its raw pointer position before stop; apply the active snap once more.
+  const wasRigid = Boolean(rigidDrag)
+  if (wasRigid) node.position = rigidDrag.rawPosition
   onNodeDrag(payload)
-  alignmentGuides.value = []
+  if (wasRigid) commitRigidBranch(node)
+  if (alignmentGuides.value.length) alignmentGuides.value = []
   const preview = dragPreview.value
   dragPreview.value = null
   dropTargetId.value = null
@@ -1256,6 +1300,7 @@ function onNodeDragStop(payload) {
   const moved = movedFromOrigin(node)
   const origin = dragOrigin
   dragOrigin = null
+  if (wasRigid) updateSides([node.id])
   if (!moved) {
     // A click or mouse jitter — put the node back and move nothing.
     if (origin) {

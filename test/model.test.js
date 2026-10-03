@@ -113,6 +113,21 @@ test('tree helpers keep descendants and layout predictable', () => {
   assert.ok(laidOut.find((node) => node.id === 'child').position.x > laidOut[0].position.x)
 })
 
+test('a self-contained root branch can move as one visual group', () => {
+  const root = makeNode('root', {}, { id: 'root', root: true })
+  const child = makeNode('child', {}, { id: 'child' })
+  const leaf = makeNode('leaf', {}, { id: 'leaf' })
+  const other = makeNode('other', {}, { id: 'other', root: true })
+  const edges = [makeEdge('root', 'child', 'tree', 'root-child'), makeEdge('child', 'leaf', 'tree', 'child-leaf')]
+
+  assert.deepEqual(mapModel.rigidRootBranch?.(root, [root], edges), {
+    nodeIds: ['root', 'child', 'leaf'],
+    edgeIds: ['root-child', 'child-leaf'],
+  })
+  assert.equal(mapModel.rigidRootBranch?.(child, [child], edges), null)
+  assert.equal(mapModel.rigidRootBranch?.(root, [root], [...edges, makeEdge('leaf', other.id, 'link')]), null)
+})
+
 test('arrow navigation follows visible node positions', () => {
   const current = makeNode('current', { x: 100, y: 100 }, { id: 'current' })
   const right = makeNode('right', { x: 300, y: 110 }, { id: 'right' })
