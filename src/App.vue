@@ -38,6 +38,7 @@ import {
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
+import Logo from './Logo.vue'
 import { MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
@@ -2129,7 +2130,7 @@ onBeforeUnmount(() => {
             aria-haspopup="menu"
             :aria-expanded="appMenuOpen"
             @click="toggleAppMenu"
-          >M</button>
+          ><Logo :size="24" aria-hidden="true" /></button>
           <input
             v-if="renaming"
             ref="renameInput"
@@ -2167,7 +2168,7 @@ onBeforeUnmount(() => {
           @keydown="onAppMenuKeydown"
         >
           <button class="app-menu-version" role="menuitem" tabindex="-1" title="Copy version number" @click="copyVersion">
-            <strong>mindspace</strong>
+            <strong><Logo :size="20" aria-hidden="true" />mindspace</strong>
             <span aria-live="polite">{{ versionCopied ? 'Copied' : `Version ${APP_VERSION}` }}</span>
           </button>
           <hr />

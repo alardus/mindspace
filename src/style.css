@@ -27,9 +27,11 @@ button { color: inherit; }
 .island svg, .island-menu svg { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
 
 .document-island { position: absolute; top: 12px; left: 12px; z-index: 20; gap: 4px; max-width: min(420px, calc(100% - 300px)); }
-.brand-mark { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; color: #fff; background: #1f2421; border-radius: 8px; font-size: 14px; font-weight: 700; transition: box-shadow .15s; }
-.brand-mark.open { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #CFCEC6; }
-.brand-mark:focus-visible { outline: none; box-shadow: 0 0 0 2px #fff, 0 0 0 4px #CFCEC6; }
+.brand-mark { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; color: var(--ink); background: transparent; border-radius: 8px; }
+.brand-mark:hover { background: #F3F2EE; }
+.brand-mark.open { background: #EFEEE9; }
+.brand-mark:focus-visible { outline: 2px solid #1F2421; outline-offset: 2px; }
+svg.logo { flex: none; fill: currentColor; stroke: none; }
 
 /* App menu (4a) */
 .app-menu { position: absolute; top: 62px; left: 12px; z-index: 30; display: flex; flex-direction: column; width: 240px; padding: 4px; color: var(--ink); background: #fff; border: 1px solid #E7E6E0; border-radius: 10px; box-shadow: 0 12px 32px rgba(30, 32, 28, .14); }
@@ -39,7 +41,7 @@ button { color: inherit; }
 .app-menu-item span { flex: 1; }
 .app-menu-item:hover, .app-menu-item:focus-visible, .app-menu-version:hover, .app-menu-version:focus-visible { background: #F3F2EE; }
 .app-menu-version { flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px; }
-.app-menu-version strong { font-size: 14px; font-weight: 600; line-height: 18px; }
+.app-menu-version strong { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; line-height: 18px; }
 .app-menu-version span { color: #6B6F6A; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .app-menu-dot { flex: none; width: 6px; height: 6px; background: #4F95D9; border-radius: 50%; }
 .app-menu-arrow { color: #8A8E86; font-size: 13px; font-style: normal; }
