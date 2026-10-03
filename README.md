@@ -7,9 +7,9 @@
 **Local-first mind maps in your browser.**
 Fast to type, calm to look at, and your data never leaves your device.
 
-[Try it](https://mindspace-flame-seven.vercel.app/) · [Report a bug](https://github.com/alardus/mindspace/issues/new) · [Changelog](https://github.com/alardus/mindspace/tags)
+[Try it](https://dasmindspace.app/) · [Report a bug](https://github.com/alardus/mindspace/issues/new) · [Changelog](https://github.com/alardus/mindspace/tags)
 
-[![deploy](https://img.shields.io/github/deployments/alardus/mindspace/Production?label=vercel&logo=vercel)](https://mindspace-flame-seven.vercel.app/)
+[![deploy](https://img.shields.io/github/deployments/alardus/mindspace/Production?label=vercel&logo=vercel)](https://dasmindspace.app/)
 ![version](https://img.shields.io/github/package-json/v/alardus/mindspace?color=1F2421&label=version)
 ![license](https://img.shields.io/github/license/alardus/mindspace?color=1F2421)
 
