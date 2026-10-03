@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
   DEFAULT_SIZE,
@@ -23,6 +23,7 @@ import {
   normalizeSettings,
   nodeStyle,
   orientEdges,
+  paint,
   paletteColors,
   parseOpml,
   plural,
@@ -114,6 +115,41 @@ try {
   // Without storage the What’s new dot just stays visible.
 }
 const whatsNewUnseen = ref(seenVersion !== APP_VERSION)
+
+// Theme: the inline script in index.html applies it before first paint; this keeps it in sync afterwards.
+const THEME_KEY = 'mindspace:theme'
+const THEMES = { system: 'System', light: 'Light', dark: 'Dark' }
+let savedTheme = null
+try {
+  savedTheme = localStorage.getItem(THEME_KEY)
+} catch {
+  // Without storage the theme follows the system.
+}
+const theme = ref(savedTheme in THEMES ? savedTheme : 'system')
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
+const systemDark = ref(darkQuery.matches)
+const onSystemTheme = (event) => (systemDark.value = event.matches)
+watchEffect(() => {
+  const root = document.documentElement
+  root.classList.add('theme-switching')
+  root.dataset.theme = theme.value === 'dark' || (theme.value === 'system' && systemDark.value) ? 'dark' : 'light'
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(root).getPropertyValue('--canvas').trim())
+  requestAnimationFrame(() => root.classList.remove('theme-switching'))
+})
+
+function setTheme(value) {
+  theme.value = value
+  try {
+    localStorage.setItem(THEME_KEY, value)
+  } catch {
+    // The choice still applies for this session.
+  }
+}
+
+function cycleTheme() {
+  setTheme({ light: 'dark', dark: 'system', system: 'light' }[theme.value])
+  notify(`Theme: ${THEMES[theme.value]}`)
+}
 const helpOpen = ref(false)
 const helpDialog = ref(null)
 const imageDialog = ref(null)
@@ -1748,7 +1784,7 @@ async function loadFile(event) {
   }
 }
 
-const appMenuItems = () => [...(appMenu.value?.querySelectorAll('[role="menuitem"]') ?? [])]
+const appMenuItems = () => [...(appMenu.value?.querySelectorAll('[role^="menuitem"]') ?? [])]
 
 function toggleAppMenu() {
   if (appMenuOpen.value) return closeMenus()
@@ -1849,6 +1885,7 @@ function runShortcut(id, event) {
     case 'collapse':
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
     case 'help': return openHelp(event.target)
+    case 'theme': return cycleTheme()
     case 'deselect':
       contextMenu.value = null
       closeMenus()
@@ -1985,6 +2022,7 @@ onMounted(() => {
   window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
   window.addEventListener('resize', placeSearch)
+  darkQuery.addEventListener('change', onSystemTheme)
   clockTimer = setInterval(() => (now.value = Date.now()), 60000)
   showShortcutsTip()
 })
@@ -2005,6 +2043,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
   window.removeEventListener('resize', placeSearch)
+  darkQuery.removeEventListener('change', onSystemTheme)
   persistDocuments(false)
   clearTimeout(saveTimer)
   clearTimeout(toastTimer)
@@ -2072,7 +2111,7 @@ onBeforeUnmount(() => {
                 'search-match': searchState(id) === 'match' || searchState(id) === 'current',
                 'search-current': searchState(id) === 'current',
               }]"
-              :style="{ '--branch': data.color }"
+              :style="{ '--branch': paint(data.color) }"
               :aria-current="selected ? 'true' : undefined"
               :aria-label="data.label || data.image?.name"
               tabindex="-1"
@@ -2209,6 +2248,28 @@ onBeforeUnmount(() => {
             <span>Keyboard shortcuts</span>
             <kbd>?</kbd>
           </button>
+          <div class="app-menu-item app-menu-theme" role="group" aria-label="Theme">
+            <span>Theme</span>
+            <div class="theme-switch">
+              <button
+                v-for="(label, key) in THEMES"
+                :key="key"
+                role="menuitemradio"
+                tabindex="-1"
+                :title="label"
+                :aria-label="label"
+                :aria-checked="theme === key"
+                :class="{ active: theme === key }"
+                @click="setTheme(key)"
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <template v-if="key === 'system'"><rect x="2" y="2.75" width="12" height="8.5" rx="1.5" /><path d="M5.5 13.75h5M8 11.25v2.5" /></template>
+                  <template v-else-if="key === 'light'"><circle cx="8" cy="8" r="2.75" /><path d="M8 1.5v1.25M8 13.25v1.25M1.5 8h1.25M13.25 8h1.25M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9" /></template>
+                  <path v-else d="M13.25 9.6A5.5 5.5 0 116.4 2.75a4.4 4.4 0 006.85 6.85z" />
+                </svg>
+              </button>
+            </div>
+          </div>
           <template v-if="REPOSITORY_URL">
             <hr />
             <a class="app-menu-item" role="menuitem" tabindex="-1" :href="REPOSITORY_URL" target="_blank" rel="noopener" @click="closeAppMenu()">
@@ -2388,7 +2449,7 @@ onBeforeUnmount(() => {
 
         <svg v-if="alignmentGuides.length || dragPreview?.mode === 'attach'" class="drag-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
-            <path v-if="dragPreview?.mode === 'attach'" :d="dragPreview.path" :stroke="dragPreview.color" />
+            <path v-if="dragPreview?.mode === 'attach'" :d="dragPreview.path" :style="{ stroke: paint(dragPreview.color) }" />
             <line
               v-for="(guide, index) in alignmentGuides"
               :key="index"
@@ -2475,7 +2536,7 @@ onBeforeUnmount(() => {
                   v-for="color in swatches"
                   :key="color"
                   :class="{ active: selectedColor === color }"
-                  :style="{ '--swatch': color }"
+                  :style="{ '--swatch': paint(color) }"
                   :aria-label="`Color ${color}`"
                   :aria-pressed="selectedColor === color"
                   @click="setColor(color)"
@@ -2518,7 +2579,7 @@ onBeforeUnmount(() => {
                   v-for="color in swatches"
                   :key="color"
                   :class="{ active: selectedColor === color }"
-                  :style="{ '--swatch': color }"
+                  :style="{ '--swatch': paint(color) }"
                   :aria-label="`Color ${color}`"
                   :aria-pressed="selectedColor === color"
                   @click="setColor(color)"
@@ -2555,7 +2616,7 @@ onBeforeUnmount(() => {
                   :aria-pressed="settings.palette === key"
                   @click="setSetting('palette', key)"
                 >
-                  <span class="palette-dots"><i v-for="color in palette.colors" :key="color" :style="{ background: color }"></i></span>
+                  <span class="palette-dots"><i v-for="color in palette.colors" :key="color" :style="{ background: paint(color) }"></i></span>
                   <span class="palette-name">{{ palette.name }}</span>
                   <svg v-if="settings.palette === key" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg>
                 </button>

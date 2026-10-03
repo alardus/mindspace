@@ -12,6 +12,15 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <title>Mindspace</title>
+    <script>
+      // Apply the theme before CSS loads so a dark theme never flashes light. App.vue keeps it in sync afterwards.
+      try {
+        var theme = localStorage.getItem('mindspace:theme')
+        if (theme !== 'light' && theme !== 'dark') theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.dataset.theme = theme
+        if (theme === 'dark') document.querySelector('meta[name="theme-color"]').content = '#161816'
+      } catch (error) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

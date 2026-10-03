@@ -6,7 +6,11 @@ export const PALETTES = {
   mono: { name: 'Mono', colors: ['#1F2421', '#3E443F', '#5D635C', '#7C817A', '#9B9F98', '#BABDB6'] },
 }
 export const COLORS = PALETTES.bright.colors
-const ALL_COLORS = new Set(Object.values(PALETTES).flatMap((palette) => palette.colors))
+// Maps store the light palette hex, which is just its palette index; paint() resolves it to the
+// --<palette>-<n> variable so the current theme picks the shade. Hex outside the palettes stays as is.
+const PALETTE_VARS = new Map(Object.entries(PALETTES)
+  .flatMap(([key, palette]) => palette.colors.map((color, index) => [color, `var(--${key}-${index + 1})`])))
+export const paint = (color) => PALETTE_VARS.get(color) ?? color
 
 export const DEFAULT_SETTINGS = { layout: 'both', palette: 'bright', lines: 'smooth', density: 'normal' }
 const SETTING_VALUES = {
@@ -44,7 +48,7 @@ const LEGACY_COLORS = {
 }
 
 export const branchColor = (index, palette = 'bright') => paletteColors(palette)[index % 6]
-const normalizeColor = (color) => (ALL_COLORS.has(color) ? color : LEGACY_COLORS[color] ?? COLORS[0])
+const normalizeColor = (color) => (PALETTE_VARS.has(color) ? color : LEGACY_COLORS[color] ?? COLORS[0])
 
 export const NODE_STYLES = ['line', 'card', 'text']
 export const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
@@ -114,7 +118,7 @@ export function orientEdges(nodes, edges, layout = 'both') {
     const side = target?.data?.side === 'left' ? 'left' : 'right'
     edge.sourceHandle = layout === 'tree' ? 'source-tree' : `source-${side}`
     edge.targetHandle = `target-${side === 'left' ? 'right' : 'left'}`
-    edge.style = { stroke: target?.data?.color ?? COLORS[0], strokeWidth: 2 }
+    edge.style = { stroke: paint(target?.data?.color ?? COLORS[0]), strokeWidth: 2 }
   }
   return edges
 }

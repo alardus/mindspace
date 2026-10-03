@@ -69,6 +69,7 @@ export const SHORTCUTS = [
     match: (event) => hasMod(event) && ((event.shiftKey && letter(event) === 'z') || letter(event) === 'y'),
   },
   { id: 'search', group: 'General', label: 'Search', keys: ['Mod', 'F'], match: (event) => hasMod(event) && !event.shiftKey && !event.altKey && (letter(event) === 'f' || event.code === 'KeyF') },
+  { id: 'theme', group: 'General', label: 'Switch theme', keys: ['Shift', 'Mod', 'L'], match: (event) => hasMod(event) && event.shiftKey && !event.altKey && (letter(event) === 'l' || event.code === 'KeyL') },
   // On the Russian layout Shift+/ produces a comma — check the physical key too.
   { id: 'help', group: 'General', label: 'This help', keys: ['?'], match: (event) => !hasMod(event) && (event.key === '?' || (event.shiftKey && event.code === 'Slash')) },
 ]

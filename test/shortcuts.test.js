@@ -41,6 +41,8 @@ test('help groups cover every registry entry in group order', () => {
     .find((item) => item.id === 'noteLine').bindings, [['Tab'], ['Shift', 'Enter']])
   assert.deepEqual(groups.find((group) => group.title === 'General').items
     .find((item) => item.id === 'redo').bindings, [['Shift', 'Ctrl', 'Z'], ['Ctrl', 'Y']])
+  assert.deepEqual(shortcutKeys('theme', true), ['⇧', '⌘', 'L'])
+  assert.equal(findShortcut({ key: 'L', code: 'KeyL', metaKey: true, ctrlKey: false, shiftKey: true, altKey: false }).id, 'theme')
   assert.deepEqual(groups.find((group) => group.title === 'Canvas').items
     .find((item) => item.id === 'pan').bindings, [['Space', 'drag']])
   assert.deepEqual(groups.find((group) => group.title === 'Canvas').items
