@@ -192,6 +192,68 @@ export function nodeInDirection(nodes, currentId, direction) {
   return best
 }
 
+const intervalGap = (a0, a1, b0, b1) => Math.max(a0 - b1, b0 - a1, 0)
+
+// Shift-drag smart guides for center alignment and equal gaps.
+export function snapNode(rect, candidates, threshold, maxDistance) {
+  const options = { x: [], y: [] }
+  const axes = { x: ['width', 'y', 'height'], y: ['height', 'x', 'width'] }
+  const end = (item, axis) => item[axis] + item[axes[axis][0]]
+  const center = (item, axis) => item[axis] + item[axes[axis][0]] / 2
+  const gap = (a, b, axis) => intervalGap(a[axis], end(a, axis), b[axis], end(b, axis))
+  const alignGuide = (axis, at, from, to) => axis === 'x'
+    ? { x1: at, y1: from, x2: at, y2: to }
+    : { x1: from, y1: at, x2: to, y2: at }
+  const gapGuide = (axis, from, to, at) => axis === 'x'
+    ? { x1: (from + to) / 2, y1: at - 8, x2: (from + to) / 2, y2: at + 8 }
+    : { x1: at - 8, y1: (from + to) / 2, x2: at + 8, y2: (from + to) / 2 }
+  const add = (axis, delta, distance, guides, priority = 1) => {
+    if (Math.abs(delta) <= threshold && distance <= maxDistance) options[axis].push({ delta, distance, guides, priority })
+  }
+
+  // ponytail: only the nearest 50 blocks participate; use a spatial index if dense maps need more.
+  const nearby = candidates
+    .filter((candidate) => Math.min(gap(rect, candidate, 'x'), gap(rect, candidate, 'y')) <= maxDistance)
+    .sort((a, b) => Math.hypot(center(a, 'x') - center(rect, 'x'), center(a, 'y') - center(rect, 'y'))
+      - Math.hypot(center(b, 'x') - center(rect, 'x'), center(b, 'y') - center(rect, 'y')))
+    .slice(0, 50)
+
+  for (const axis of ['x', 'y']) {
+    const [size, cross, crossSize] = axes[axis]
+    for (const candidate of nearby) {
+      add(axis, center(candidate, axis) - center(rect, axis), gap(rect, candidate, cross), (moved) => [
+        alignGuide(axis, center(candidate, axis), Math.min(moved[cross], candidate[cross]), Math.max(end(moved, cross), end(candidate, cross))),
+      ], 0)
+    }
+    for (let i = 0; i < nearby.length; i += 1) {
+      for (let j = i + 1; j < nearby.length; j += 1) {
+        const [first, second] = nearby[i][axis] <= nearby[j][axis] ? [nearby[i], nearby[j]] : [nearby[j], nearby[i]]
+        if (end(first, axis) > second[axis] || gap(first, second, cross)
+          || gap(rect, first, cross) || gap(rect, second, cross)) continue
+        const space = second[axis] - end(first, axis)
+        const arrangements = space >= rect[size] ? [{
+          position: (end(first, axis) + second[axis] - rect[size]) / 2,
+          segments: (moved) => [[end(first, axis), moved[axis]], [end(moved, axis), second[axis]]],
+        }] : []
+        if (space > 0) arrangements.push(
+          { position: first[axis] - space - rect[size], segments: (moved) => [[end(moved, axis), first[axis]], [end(first, axis), second[axis]]] },
+          { position: end(second, axis) + space, segments: (moved) => [[end(first, axis), second[axis]], [end(second, axis), moved[axis]]] },
+        )
+        for (const arrangement of arrangements) {
+          add(axis, arrangement.position - rect[axis], 0, (moved) => arrangement.segments(moved)
+            .map(([from, to]) => gapGuide(axis, from, to, moved[cross] + moved[crossSize] / 2)))
+        }
+      }
+    }
+  }
+
+  const best = (axis) => options[axis].sort((a, b) => Math.abs(a.delta) - Math.abs(b.delta) || a.priority - b.priority || a.distance - b.distance)[0]
+  const x = best('x')
+  const y = best('y')
+  const moved = { ...rect, x: rect.x + (x?.delta ?? 0), y: rect.y + (y?.delta ?? 0) }
+  return { x: moved.x, y: moved.y, guides: [...(x?.guides(moved) ?? []), ...(y?.guides(moved) ?? [])] }
+}
+
 export const DEFAULT_SIZE = { width: 180, height: 30, rootWidth: 200, rootHeight: 56 }
 
 export function layoutVerticalGap(settings = DEFAULT_SETTINGS) {

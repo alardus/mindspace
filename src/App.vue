@@ -32,6 +32,7 @@ import {
   relativeTime,
   searchOrder,
   shiftNodesBelow,
+  snapNode,
   starterMap,
   toOpml,
 } from './model.js'
@@ -129,6 +130,7 @@ const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 const INSPECTOR_SPACE = 12 + 320 + 12
 const easeOut = (t) => 1 - (1 - t) ** 3
 const canvasElement = ref(null)
+const alignmentGuides = ref([])
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
 function focusMap(duration = 300) {
@@ -998,6 +1000,7 @@ function connectNodes(connection) {
 }
 
 function onNodeDragStart({ node }) {
+  alignmentGuides.value = []
   dragStart = snapshot()
   dragOrigin = { ...node.position }
   // The branch moves with its parent; Vue Flow moves selected descendants itself.
@@ -1158,13 +1161,37 @@ function updateSides(ids) {
   if (changed) orient()
 }
 
-function onNodeDrag({ node, nodes: dragged = [node] }) {
+function onNodeDrag({ event, node, nodes: dragged = [node] }) {
+  alignmentGuides.value = []
+  if (event.shiftKey) {
+    const excluded = new Set(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
+    const rectOf = (item) => ({
+      x: item.position.x,
+      y: item.position.y,
+      width: item.dimensions?.width || (item.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width),
+      height: item.dimensions?.height || (item.data.root ? DEFAULT_SIZE.rootHeight : DEFAULT_SIZE.height),
+    })
+    const snapped = snapNode(
+      rectOf(node),
+      nodes.value.filter((item) => !item.hidden && !excluded.has(item.id)).map(rectOf),
+      8 / viewport.value.zoom,
+      400 / viewport.value.zoom,
+    )
+    const dx = snapped.x - node.position.x
+    const dy = snapped.y - node.position.y
+    for (const item of dragged) item.position = { x: item.position.x + dx, y: item.position.y + dy }
+    alignmentGuides.value = snapped.guides
+  }
   moveBranch(node)
   updateSides(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
   showAttachPreview(node, dragged)
 }
 
-function onNodeDragStop({ node }) {
+function onNodeDragStop(payload) {
+  const { node } = payload
+  // Vue Flow restores its raw pointer position before stop; apply the active snap once more.
+  onNodeDrag(payload)
+  alignmentGuides.value = []
   const preview = dragPreview.value
   dragPreview.value = null
   dropTargetId.value = null
@@ -2338,9 +2365,17 @@ onBeforeUnmount(() => {
         </div>
         <input ref="fileInput" class="visually-hidden" name="map-file" aria-label="Open map file" type="file" accept=".mindmap,.json,.opml,application/json,text/xml" @change="loadFile" />
 
-        <svg v-if="dragPreview?.mode === 'attach'" class="attach-preview" aria-hidden="true">
+        <svg v-if="alignmentGuides.length || dragPreview?.mode === 'attach'" class="drag-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
-            <path :d="dragPreview.path" :stroke="dragPreview.color" />
+            <path v-if="dragPreview?.mode === 'attach'" :d="dragPreview.path" :stroke="dragPreview.color" />
+            <line
+              v-for="(guide, index) in alignmentGuides"
+              :key="index"
+              :x1="guide.x1"
+              :y1="guide.y1"
+              :x2="guide.x2"
+              :y2="guide.y2"
+            />
           </g>
         </svg>
 

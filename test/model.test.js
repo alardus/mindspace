@@ -365,3 +365,44 @@ test('map search order, wrap-around and highlighting', () => {
   assert.equal(highlightParts('aaa', 'a').length, 3)
   assert.ok(highlightParts('abc', 'b').every((part) => part.text))
 })
+
+test('smart guides snap a block center only inside the threshold', () => {
+  const target = { x: 100, y: 0, width: 20, height: 20 }
+  const snapped = mapModel.snapNode?.({ x: 94, y: 80, width: 20, height: 20 }, [target], 8, 400)
+  const released = mapModel.snapNode?.({ x: 90, y: 80, width: 20, height: 20 }, [target], 8, 400)
+
+  assert.equal(snapped?.x, 100)
+  assert.deepEqual(snapped?.guides, [{ x1: 110, y1: 0, x2: 110, y2: 100 }])
+  assert.equal(released?.x, 90)
+  assert.deepEqual(released?.guides, [])
+})
+
+test('equal horizontal gaps survive a zoomed-in search radius', () => {
+  const result = mapModel.snapNode?.(
+    { x: 563, y: 0, width: 180, height: 30 },
+    [{ x: 0, y: 0, width: 180, height: 30 }, { x: 280, y: 0, width: 180, height: 30 }],
+    8,
+    200,
+  )
+
+  assert.equal(result?.x, 560)
+  assert.deepEqual(result?.guides.slice(0, 2), [
+    { x1: 230, y1: 7, x2: 230, y2: 23 },
+    { x1: 510, y1: 7, x2: 510, y2: 23 },
+  ])
+})
+
+test('equal vertical gaps use horizontal markers', () => {
+  const result = mapModel.snapNode?.(
+    { x: 0, y: 83, width: 20, height: 20 },
+    [{ x: 0, y: 0, width: 20, height: 20 }, { x: 0, y: 40, width: 20, height: 20 }],
+    8,
+    400,
+  )
+
+  assert.equal(result?.y, 80)
+  assert.deepEqual(result?.guides.slice(-2), [
+    { x1: 2, y1: 30, x2: 18, y2: 30 },
+    { x1: 2, y1: 70, x2: 18, y2: 70 },
+  ])
+})
