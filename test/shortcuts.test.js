@@ -28,6 +28,8 @@ test('modifier names follow the platform', () => {
   assert.deepEqual(shortcutKeys('collapse', false), ['Alt', '←'])
   assert.equal(keyLabel('Delete', false), 'Del')
   assert.equal(keyLabel('Tab', true), 'Tab')
+  assert.deepEqual(shortcutKeys('zoom', true), ['⌘', 'wheel'])
+  assert.deepEqual(shortcutKeys('zoom', false), ['Ctrl', 'wheel'])
 })
 
 test('help groups cover every registry entry in group order', () => {
@@ -39,6 +41,12 @@ test('help groups cover every registry entry in group order', () => {
     .find((item) => item.id === 'noteLine').bindings, [['Tab'], ['Shift', 'Enter']])
   assert.deepEqual(groups.find((group) => group.title === 'General').items
     .find((item) => item.id === 'redo').bindings, [['Shift', 'Ctrl', 'Z'], ['Ctrl', 'Y']])
+  assert.deepEqual(groups.find((group) => group.title === 'Canvas').items
+    .find((item) => item.id === 'pan').bindings, [['Space', 'drag']])
+  assert.deepEqual(groups.find((group) => group.title === 'Canvas').items
+    .find((item) => item.id === 'zoom').bindings, [['Ctrl', 'wheel']])
+  assert.deepEqual(shortcutGroups(true).find((group) => group.title === 'Canvas').items
+    .find((item) => item.id === 'zoom').bindings, [['⌘', 'wheel']])
   assert.deepEqual(groups.find((group) => group.title === 'Maps').items
     .map((item) => item.id), ['mapNavigate', 'mapOpen', 'mapRename', 'mapDuplicate', 'mapDelete', 'mapMenu'])
 })

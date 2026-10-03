@@ -39,7 +39,7 @@ import {
 import { createMindmapFile, readMindmapFile } from './archive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
 import Logo from './Logo.vue'
-import { MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
+import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
 const SHORTCUTS_TIP_KEY = 'mindspace-shortcuts-tip'
@@ -141,6 +141,26 @@ function focusMap(duration = 300) {
   const available = Math.max(200, width - (inspectorOpen.value ? INSPECTOR_SPACE : 0))
   const transform = getTransformForBounds(getRectOfNodes(visible), available, height, 0.2, 1.25, 0.18)
   setViewport(transform, { duration })
+}
+
+const MIN_ZOOM = 0.2
+const MAX_ZOOM = 2
+
+// Vue Flow zooms on ctrl+wheel only on macOS (trackpad pinch sends such events); on Windows and Linux
+// the same gesture pans. Take it over on every platform, zooming toward the cursor like Vue Flow's pinch zoom does.
+// Cmd+wheel is the idiomatic macOS zoom, so accept it there as well.
+function onCanvasWheel(event) {
+  if (!event.ctrlKey && !(IS_MAC && event.metaKey)) return
+  event.preventDefault()
+  event.stopPropagation()
+  const { x: viewX, y: viewY, zoom: current } = viewport.value
+  const delta = -event.deltaY * (event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 2e-3) * (IS_MAC ? 10 : 1)
+  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, current * 2 ** delta))
+  const rect = canvasElement.value.getBoundingClientRect()
+  const x = event.clientX - rect.left
+  const y = event.clientY - rect.top
+  // The point under the cursor stays under it at the new zoom.
+  setViewport({ x: x - (x - viewX) * (zoom / current), y: y - (y - viewY) * (zoom / current), zoom })
 }
 let dragStart = null
 let editStart = null
@@ -1999,7 +2019,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }" @dragover.prevent @drop.prevent="onImageDrop">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @dragover.prevent @drop.prevent="onImageDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -2009,12 +2029,12 @@ onBeforeUnmount(() => {
           :delete-key-code="null"
           :selection-key-code="true"
           :multi-selection-key-code="MULTI_SELECT_KEY"
-          :pan-on-drag="[1, 2]"
+          :pan-on-drag="[0, 1, 2]"
           :pan-on-scroll="true"
           :pan-on-scroll-speed="1"
           :pan-activation-key-code="PAN_KEY"
-          :min-zoom="0.2"
-          :max-zoom="2"
+          :min-zoom="MIN_ZOOM"
+          :max-zoom="MAX_ZOOM"
           :zoom-on-scroll="false"
           :zoom-on-pinch="true"
           :zoom-on-double-click="false"

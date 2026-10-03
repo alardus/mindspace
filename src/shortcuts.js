@@ -11,6 +11,7 @@ export const MULTI_SELECT_KEY = 'Shift'
 // Symbols on Mac, names on Windows and Linux.
 const KEY_NAMES = {
   Mod: ['⌘', 'Ctrl'],
+  Ctrl: ['⌃', 'Ctrl'],
   Alt: ['⌥', 'Alt'],
   Shift: ['⇧', 'Shift'],
   Delete: ['⌫', 'Del'],
@@ -32,15 +33,15 @@ export const SHORTCUTS = [
   {
     id: 'navigate',
     group: 'Nodes',
-    label: 'Move between nodes',
+    label: 'Between nodes',
     keys: ['←', '↑', '→', '↓'],
     bindings: [['←'], ['↑'], ['→'], ['↓']],
     match: (event) => !event.altKey && !event.metaKey && !event.ctrlKey
       && ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key),
   },
   { id: 'typeToEdit', group: 'Nodes', label: 'Edit selected node', keys: ['type'] },
-  { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
-  { id: 'remove', group: 'Nodes', label: 'Delete', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
+  // { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
+  { id: 'remove', group: 'Nodes', label: 'Delete node', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
   { id: 'link', group: 'Nodes', label: 'Link nodes', keys: ['drag from edge'] },
   { id: 'noteLine', group: 'Editing', label: 'Description field', keys: ['Tab'], bindings: [['Tab'], ['Shift', 'Enter']] },
   { id: 'finishEdit', group: 'Editing', label: 'Finish editing', keys: ['Enter'] },
@@ -57,7 +58,7 @@ export const SHORTCUTS = [
   { id: 'mapRename', group: 'Maps', label: 'Rename map', keys: ['F2'] },
   { id: 'mapDuplicate', group: 'Maps', label: 'Duplicate map', keys: ['Mod', 'D'] },
   { id: 'mapDelete', group: 'Maps', label: 'Delete map', keys: ['Delete'] },
-  { id: 'mapMenu', group: 'Maps', label: 'Open map menu', keys: ['Shift', 'F10'], bindings: [['Shift', 'F10'], ['Menu']] },
+  { id: 'mapMenu', group: 'Maps', label: 'Open map menu', keys: ['Shift', 'F10'] },
   { id: 'undo', group: 'General', label: 'Undo', keys: ['Mod', 'Z'], match: (event) => hasMod(event) && !event.shiftKey && letter(event) === 'z' },
   {
     id: 'redo',
