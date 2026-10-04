@@ -35,6 +35,7 @@
   --toast-text: #FFFFFF;
   --focus: #1F2421;
   --node-hover: rgba(31, 36, 33, .04);
+  --node-selected-mix: 12%;
   --edge: #9A9F96;
   --relation: #B68B72;
   --guide: #D6537D;
@@ -98,6 +99,7 @@
   --toast-text: #161816;
   --focus: #ECEBE6;
   --node-hover: rgba(236, 235, 230, .05);
+  --node-selected-mix: 18%;
   --edge: #6E726A;
   --relation: #C9A08A;
   --lightbox: #0E100E;
@@ -346,10 +348,10 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 /* Nodes: text above a line in the branch color */
 .vue-flow__node-mind { width: auto; padding: 0; border: 0; background: transparent; }
 .vue-flow__node-mind.dragging { opacity: .6; }
-.mind-node { position: relative; display: flex; flex-direction: column; gap: 1px; width: max-content; min-width: 160px; max-width: 280px; padding: 0 2px 6px; color: var(--ink); border-bottom: 2px solid var(--branch); border-radius: 6px 6px 0 0; transition: background .15s; }
+.mind-node { position: relative; display: flex; flex-direction: column; gap: 1px; width: max-content; max-width: 280px; padding: 4px 8px 6px; color: var(--ink); border-bottom: 2px solid var(--branch); border-radius: 6px 6px 0 0; transition: background .15s; }
 .mind-node:hover { background: var(--node-hover); }
-.mind-node.selected, .mind-node.editing { background: var(--selected); box-shadow: 0 0 0 3px color-mix(in srgb, var(--branch) 24%, transparent); }
-.mind-node.drop-target { background: var(--selected); }
+.mind-node.selected, .mind-node.editing, .mind-node.drop-target { background: color-mix(in oklch, var(--branch) var(--node-selected-mix), var(--canvas)); }
+.mind-node.editing { box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--branch) 45%, transparent); }
 .mind-node.merge-target { box-shadow: 0 0 0 4px color-mix(in srgb, var(--branch) 45%, transparent); }
 .drag-preview { position: absolute; inset: 0; z-index: 5; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .drag-preview line { stroke: var(--guide); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -362,7 +364,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 /* Card and Text styles for branches */
 .mind-node.style-card { padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .mind-node.style-card:hover { border-color: var(--border-strong); background: var(--surface); }
-.mind-node.style-card.selected, .mind-node.style-card.editing { background: var(--selected); border-color: var(--branch); }
+.mind-node.style-card.selected, .mind-node.style-card.editing { background: color-mix(in oklch, var(--branch) var(--node-selected-mix), var(--surface)); border-color: var(--branch); }
 .mind-node.style-text { padding: 2px 4px; border-bottom: 0; border-radius: 6px; }
 
 /* Root: a card by default, text larger and centered in any style */
