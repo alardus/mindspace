@@ -181,7 +181,7 @@ function focusMap(duration = 300) {
 }
 
 const MIN_ZOOM = 0.2
-const MAX_ZOOM = 2
+const MAX_ZOOM = 4
 
 // Vue Flow zooms on ctrl+wheel only on macOS (trackpad pinch sends such events); on Windows and Linux
 // the same gesture pans. Take it over on every platform, zooming toward the cursor like Vue Flow's pinch zoom does.
