@@ -34,8 +34,7 @@
   --toast-bg: #1F2421;
   --toast-text: #FFFFFF;
   --focus: #1F2421;
-  --node-hover: rgba(31, 36, 33, .04);
-  --node-selected-mix: 12%;
+  --node-hover: color-mix(in oklab, var(--ink) 4%, var(--canvas));
   --edge: #9A9F96;
   --relation: #B68B72;
   --guide: #D6537D;
@@ -98,14 +97,13 @@
   --toast-bg: #ECEBE6;
   --toast-text: #161816;
   --focus: #ECEBE6;
-  --node-hover: rgba(236, 235, 230, .05);
-  --node-selected-mix: 18%;
+  --node-hover: color-mix(in oklab, var(--ink) 5%, var(--canvas));
   --edge: #6E726A;
   --relation: #C9A08A;
   --lightbox: #0E100E;
-  --mark: rgba(242, 201, 76, .28);
+  --mark: color-mix(in oklab, var(--mark-current) 28%, var(--canvas));
   --mark-current-text: #161816;
-  --match-bg: rgba(242, 201, 76, .10);
+  --match-bg: color-mix(in oklab, var(--mark-current) 10%, var(--canvas));
   --dim-opacity: .32;
   --shadow-island: 0 4px 14px rgba(0, 0, 0, .35);
   --shadow-menu: 0 12px 32px rgba(0, 0, 0, .5);
@@ -285,7 +283,10 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .vue-flow__pane { cursor: crosshair; }
 .vue-flow__pane.draggable { cursor: grab; }
 .vue-flow__pane.dragging { cursor: grabbing; }
-.vue-flow__selection { background: color-mix(in srgb, var(--muted) 9%, transparent); border: 1px solid var(--muted); border-radius: 8px; }
+/* .mind-flow: Vue Flow's theme CSS loads after this file and would win with its blue. Its box around a rubber-band
+   selection lies over the selected nodes, so it gets no fill: a tint there shifts every branch fill toward blue. */
+.mind-flow .vue-flow__selection { background: color-mix(in oklab, var(--muted) 9%, transparent); border: 1px solid var(--muted); border-radius: 8px; }
+.mind-flow .vue-flow__nodesselection-rect { background: transparent; border-color: var(--muted); }
 
 /* Inspector panel */
 .inspector { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 25; display: flex; flex-direction: column; width: 320px; height: calc(100% - 24px); min-height: 0; overflow: hidden; color: var(--ink); background: var(--surface-panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-island); }
@@ -348,11 +349,28 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 /* Nodes: text above a line in the branch color */
 .vue-flow__node-mind { width: auto; padding: 0; border: 0; background: transparent; }
 .vue-flow__node-mind.dragging { opacity: .6; }
+/* Branch tints, derived once per node. OKLab keeps the branch hue (OKLCH arcs blue → green toward the warm canvas and drops
+   the hue of grays); mixing with the canvas keeps them opaque over the dot grid. Fill lightness is clamped so --muted keeps 4.5:1. */
+.mind-node {
+  --branch-fill: oklab(from color-mix(in oklab, var(--branch) 18%, var(--canvas)) max(l, .965) a b);
+  --branch-ring: color-mix(in oklab, var(--branch) 45%, var(--canvas));
+  /* The root's halo overlaps the connectors of every branch, so it stays see-through. */
+  --branch-halo: color-mix(in oklab, var(--branch) 22%, transparent);
+}
+:root[data-theme="dark"] .mind-node {
+  --branch-fill: oklab(from color-mix(in oklab, var(--branch) 20%, var(--canvas)) min(l, .335) a b);
+  --branch-ring: color-mix(in oklab, var(--branch) 50%, var(--canvas));
+}
+/* Without relative colors (Safari < 18, Firefox < 128) the fill would vanish; fall back to the plain mix, no clamp. */
+@supports not (color: oklab(from red l a b)) {
+  .mind-node { --branch-fill: color-mix(in oklab, var(--branch) 14%, var(--canvas)); }
+  :root[data-theme="dark"] .mind-node { --branch-fill: color-mix(in oklab, var(--branch) 20%, var(--canvas)); }
+}
 .mind-node { position: relative; display: flex; flex-direction: column; gap: 1px; width: max-content; max-width: 280px; padding: 4px 8px 6px; color: var(--ink); border-bottom: 2px solid var(--branch); border-radius: 6px 6px 0 0; transition: background .15s; }
 .mind-node:hover { background: var(--node-hover); }
-.mind-node.selected, .mind-node.editing, .mind-node.drop-target { background: color-mix(in oklch, var(--branch) var(--node-selected-mix), var(--canvas)); }
-.mind-node.editing { box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--branch) 45%, transparent); }
-.mind-node.merge-target { box-shadow: 0 0 0 4px color-mix(in srgb, var(--branch) 45%, transparent); }
+.mind-node.selected, .mind-node.editing, .mind-node.drop-target { background: var(--branch-fill); }
+.mind-node.editing { box-shadow: 0 0 0 1.5px var(--branch-ring); }
+.mind-node.merge-target { box-shadow: 0 0 0 4px var(--branch-ring); }
 .drag-preview { position: absolute; inset: 0; z-index: 5; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .drag-preview line { stroke: var(--guide); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .drag-preview path { fill: none; stroke-width: 2; stroke-linecap: round; }
@@ -364,7 +382,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 /* Card and Text styles for branches */
 .mind-node.style-card { padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .mind-node.style-card:hover { border-color: var(--border-strong); background: var(--surface); }
-.mind-node.style-card.selected, .mind-node.style-card.editing { background: color-mix(in oklch, var(--branch) var(--node-selected-mix), var(--surface)); border-color: var(--branch); }
+.mind-node.style-card.selected, .mind-node.style-card.editing { background: var(--branch-fill); border-color: var(--branch); }
 .mind-node.style-text { padding: 2px 4px; border-bottom: 0; border-radius: 6px; }
 
 /* Root: a card by default, text larger and centered in any style */
@@ -372,7 +390,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .mind-node.root .node-title { font-size: 17px; font-weight: 600; letter-spacing: -.01em; line-height: 22px; }
 .mind-node.root.style-card { min-height: 56px; padding: 6px 24px; border-color: var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-island); }
 .mind-node.root.style-card:hover { background: var(--surface); border-color: var(--border-strong); }
-.mind-node.root.style-card.selected, .mind-node.root.style-card.editing { background: var(--surface); border-color: var(--branch); box-shadow: 0 0 0 3px color-mix(in srgb, var(--branch) 22%, transparent), var(--shadow-island); }
+.mind-node.root.style-card.selected, .mind-node.root.style-card.editing { background: var(--surface); border-color: var(--branch); box-shadow: 0 0 0 3px var(--branch-halo), var(--shadow-island); }
 .mind-node.root.style-line { padding: 0 8px 8px; }
 
 /* Image content keeps its original aspect ratio; tree nodes use the normal compact footprint. */
@@ -441,7 +459,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .zoom-controls button:last-child { border-right: 0; }
 .zoom-controls button:hover { background: var(--hover); }
 .zoom-controls .auto-layout-toggle.active { color: var(--success); background: var(--selected); }
-.zoom-controls .auto-layout-toggle.active:hover { background: color-mix(in srgb, var(--success) 18%, var(--selected)); }
+.zoom-controls .auto-layout-toggle.active:hover { background: color-mix(in oklab, var(--success) 18%, var(--selected)); }
 .zoom-controls .zoom-value { width: auto; min-width: 52px; padding: 0 8px; color: var(--muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .zoom-controls .zoom-value:hover { color: var(--ink); }
 .zoom-controls svg { width: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -458,14 +476,14 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .toast { position: fixed; z-index: 80; left: 50%; bottom: 64px; transform: translateX(-50%); padding: 10px 15px; color: var(--toast-text); background: var(--toast-bg); border-radius: 9px; box-shadow: var(--shadow-menu); font-size: 11px; }
 .undo-toast { display: flex; align-items: center; gap: 16px; padding: 10px 12px 10px 16px; color: var(--toast-text); background: var(--toast-bg); border-radius: 10px; font-size: 14px; }
 .undo-toast button { padding: 4px 8px; color: var(--toast-text); background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; }
-.undo-toast button:hover, .undo-toast button:focus-visible { background: color-mix(in srgb, var(--toast-text) 12%, transparent); outline: none; }
+.undo-toast button:hover, .undo-toast button:focus-visible { background: color-mix(in oklab, var(--toast-text) 12%, transparent); outline: none; }
 .toast-enter-active, .toast-leave-active { transition: .2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 8px); }
 .image-preview { max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 36px 12px 12px; background: var(--lightbox); border: 0; border-radius: 12px; box-shadow: var(--shadow-modal); }
-.image-preview::backdrop { background: color-mix(in srgb, var(--lightbox) 67%, transparent); }
+.image-preview::backdrop { background: color-mix(in oklab, var(--lightbox) 67%, transparent); }
 .image-preview img { display: block; max-width: calc(100vw - 72px); max-height: calc(100vh - 96px); object-fit: contain; }
 .image-preview-close { position: absolute; top: 6px; right: 8px; width: 28px; height: 28px; padding: 0; color: var(--lightbox-text); background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 22px; line-height: 1; }
-.image-preview-close:hover, .image-preview-close:focus-visible { background: color-mix(in srgb, var(--lightbox-text) 12%, transparent); outline: none; }
+.image-preview-close:hover, .image-preview-close:focus-visible { background: color-mix(in oklab, var(--lightbox-text) 12%, transparent); outline: none; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 @media (max-width: 1100px) {
