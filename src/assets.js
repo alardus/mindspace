@@ -1,6 +1,6 @@
 import { IMAGE_MIME_TYPES, normalizeImageReference } from './model.js'
 
-export const MAX_IMAGE_BYTES = 2 * 1024 * 1024
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const DB_NAME = 'mindspace-assets-v1'
 const STORE_NAME = 'images'
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
@@ -17,7 +17,7 @@ export function matchesImageMime(bytes, mime) {
 export function validateImageFile(file) {
   if (!IMAGE_MIME_TYPES.has(file?.type)) throw new Error('Use PNG, JPEG, WebP, or GIF.')
   if (!file.size) throw new Error('The image is empty.')
-  if (file.size > MAX_IMAGE_BYTES) throw new Error('Images must be 2 MB or smaller.')
+  if (file.size > MAX_IMAGE_BYTES) throw new Error('Images must be 10 MB or smaller.')
 }
 
 export async function createImageAsset(file, assetId = uid()) {

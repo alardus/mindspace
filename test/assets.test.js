@@ -31,10 +31,10 @@ test('empty image files are rejected', () => {
   )
 })
 
-test('images above 2 MiB are rejected', () => {
+test('images above 10 MiB are rejected', () => {
   assert.throws(
-    () => validateImageFile(new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' })),
-    { message: 'Images must be 2 MB or smaller.' },
+    () => validateImageFile(new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' })),
+    { message: 'Images must be 10 MB or smaller.' },
   )
 })
 

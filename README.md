@@ -28,7 +28,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 - **Search across the map.** `⌘F` highlights matches, dims everything else, and pans to each result, even inside collapsed branches.
 - **Many maps, one place.** Switch, rename, duplicate, and delete maps from a single menu, with undo for deletions.
 - **Drag to rearrange.** Drop a node or a whole branch onto another node to reattach it, or draw free links between any two nodes.
-- **Images.** Paste or drop PNG, JPEG, WebP, or GIF files up to 2 MB onto the canvas, as a block of their own or inside a node.
+- **Images.** Paste or drop PNG, JPEG, WebP, or GIF files up to 10 MB onto the canvas, as a block of their own or inside a node.
 - **Auto layout.** Branches to the right, on both sides, or as a tree, with smooth or straight lines and adjustable spacing. Turn it off to place nodes by hand.
 - **Branch palettes.** Bright, Calm, or Mono, plus per-branch colors inherited by children.
 - **Light and dark themes.** Follows your system or set manually; branch colors adapt to each theme.

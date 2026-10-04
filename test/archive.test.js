@@ -98,7 +98,7 @@ test('rejects archive with an oversized image', async () => {
   await assert.rejects(
     readMindmapFile(archiveFile({
       'map.json': mapEntry(),
-      'images/asset-1.png': new Uint8Array(2 * 1024 * 1024 + 1),
+      'images/asset-1.png': new Uint8Array(10 * 1024 * 1024 + 1),
       'images/asset-2.jpg': secondBytes,
     })),
     /incomplete or corrupted/i,

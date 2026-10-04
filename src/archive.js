@@ -8,7 +8,7 @@ const MIME_EXTENSIONS = {
   'image/webp': 'webp',
   'image/gif': 'gif',
 }
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_MAP_BYTES = 5 * 1024 * 1024
 const MAX_IMAGES = 100
 const MAX_TOTAL_IMAGE_BYTES = 200 * 1024 * 1024
