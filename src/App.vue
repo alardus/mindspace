@@ -25,6 +25,7 @@ import {
   orientEdges,
   paint,
   paletteColors,
+  parseMarkdown,
   parseOpml,
   plural,
   pluralNodes,
@@ -36,6 +37,7 @@ import {
   shiftNodesBelow,
   snapNode,
   starterMap,
+  toMarkdown,
   toOpml,
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
@@ -1774,11 +1776,12 @@ function download(blob, extension) {
 async function exportMap(format) {
   if (exportBusy.value) return
   exportOpen.value = false
-  const opml = format === 'opml'
   const map = cleanMap()
-  if (opml) {
-    download(new Blob([toOpml(map)], { type: 'text/x-opml' }), 'opml')
-    notify(referencedAssetIds(map).size ? 'OPML saved — images were exported as text only' : 'OPML saved')
+  if (format === 'opml' || format === 'markdown') {
+    const markdown = format === 'markdown'
+    const name = markdown ? 'Markdown' : 'OPML'
+    download(new Blob([markdown ? toMarkdown(map) : toOpml(map)], { type: markdown ? 'text/markdown' : 'text/x-opml' }), markdown ? 'md' : 'opml')
+    notify(referencedAssetIds(map).size ? `${name} saved — images were exported as text only` : `${name} saved`)
     return
   }
   exportBusy.value = true
@@ -1817,9 +1820,9 @@ async function loadFile(event) {
       await saveImageAssets(assets)
       importedAssetIds = assets.map((asset) => asset.image.assetId)
       map = imported.map
-    } else {
-      map = imported.kind === 'opml' ? parseOpml(imported.text) : normalizeMap(JSON.parse(imported.text))
-    }
+    } else if (imported.kind === 'opml') map = parseOpml(imported.text)
+    else if (imported.kind === 'markdown') map = parseMarkdown(imported.text, file.name.replace(/\.(?:md|markdown)$/i, ''))
+    else map = normalizeMap(JSON.parse(imported.text))
     if (!addDocument(map)) throw new Error('The map could not be saved on this device.')
     importedAssetIds = []
     notify(`Added: ${file.name}`)
@@ -2476,6 +2479,7 @@ onBeforeUnmount(() => {
               <div v-if="exportOpen" class="island-menu export-menu" role="menu">
                 <button class="menu-item" role="menuitem" @click="exportMap('mindmap')">Mindspace file<small>.mindmap</small></button>
                 <button class="menu-item" role="menuitem" @click="exportMap('opml')">OPML outline<small>.opml</small></button>
+                <button class="menu-item" role="menuitem" @click="exportMap('markdown')">Markdown outline<small>.md</small></button>
               </div>
             </div>
           </div>
@@ -2490,7 +2494,7 @@ onBeforeUnmount(() => {
             <svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M10 2.5v11"/></svg>
           </button>
         </div>
-        <input ref="fileInput" class="visually-hidden" name="map-file" aria-label="Open map file" type="file" accept=".mindmap,.json,.opml,application/json,text/xml" @change="loadFile" />
+        <input ref="fileInput" class="visually-hidden" name="map-file" aria-label="Open map file" type="file" accept=".mindmap,.json,.opml,.md,.markdown,application/json,text/xml,text/markdown" @change="loadFile" />
 
         <svg v-if="alignmentGuides.length || dragPreview?.mode === 'attach'" class="drag-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">

@@ -72,6 +72,13 @@ test('legacy JSON and OPML payloads are detected without archive parsing', async
   assert.deepEqual(opml, { kind: 'opml', text: '<?xml version="1.0"?><opml/>' })
 })
 
+test('Markdown files are detected by extension', async () => {
+  const text = '# Notes\n\n- First'
+
+  assert.deepEqual(await readMindmapFile(new File([text], 'notes.md')), { kind: 'markdown', text })
+  assert.deepEqual(await readMindmapFile(new File([text], 'notes.markdown')), { kind: 'markdown', text })
+})
+
 const archiveFile = (entries) => new File([zipSync(entries, { level: 0 })], 'invalid.mindmap')
 const mapEntry = () => strToU8(JSON.stringify(imageMap()))
 

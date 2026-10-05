@@ -519,6 +519,31 @@ export function toOpml(map) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0">\n  <head>\n    <title>${escapeXml(map.title)}</title>\n  </head>\n  <body>\n${body}  </body>\n</opml>\n`
 }
 
+export function toMarkdown(map) {
+  const children = new Map()
+  const childIds = new Set()
+  for (const edge of map.edges) {
+    if (edge.data?.kind !== 'tree') continue
+    if (!children.has(edge.source)) children.set(edge.source, [])
+    children.get(edge.source).push(edge.target)
+    childIds.add(edge.target)
+  }
+  const byId = new Map(map.nodes.map((node) => [node.id, node]))
+  const visited = new Set()
+  const clean = (value) => String(value ?? '').replace(/\s*\n\s*/g, ' ').trim()
+  const item = (id, depth) => {
+    const node = byId.get(id)
+    if (!node || visited.has(id)) return ''
+    visited.add(id)
+    const pad = '  '.repeat(depth)
+    const label = clean(node.data.label) || (node.data.image ? '[Image]' : 'Untitled')
+    const note = clean(node.data.note)
+    return `${pad}- ${label}\n${note ? `${pad}  > ${note}\n` : ''}${(children.get(id) ?? []).map((child) => item(child, depth + 1)).join('')}`
+  }
+  const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => item(node.id, 0)).join('')
+  return `# ${clean(map.title) || 'Untitled'}\n\n${body}`
+}
+
 export function plural(count, one, many) {
   return `${count} ${count === 1 ? one : many}`
 }
@@ -572,6 +597,88 @@ export function parseOpml(text) {
   }
 }
 
+export function parseMarkdown(text, fallbackTitle = 'Untitled') {
+  const nodes = []
+  const edges = []
+  const headings = []
+  const list = []
+  let title = ''
+  let titleFound = false
+  let activeHeading = null
+  let fence = null
+  let rootIndex = 0
+  const add = (label, parent = null) => {
+    if (nodes.length >= 5000) throw new Error('The Markdown file has more than 5000 nodes')
+    const node = makeNode(label.trim().slice(0, 500), undefined, {
+      color: parent?.data.color ?? branchColor(rootIndex++),
+    })
+    nodes.push(node)
+    if (parent) edges.push(makeEdge(parent.id, node.id))
+    return node
+  }
+  const indentOf = (value) => value.replaceAll('\t', '    ').length
+
+  for (const line of String(text).replace(/^\uFEFF/, '').replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')) {
+    const closingFence = line.match(/^ {0,3}(`+|~+)[\t ]*$/)
+    if (fence) {
+      if (closingFence && closingFence[1][0] === fence.marker && closingFence[1].length >= fence.length) fence = null
+      continue
+    }
+    const openingFence = line.match(/^ {0,3}(`{3,}|~{3,})/)
+    if (openingFence) {
+      fence = { marker: openingFence[1][0], length: openingFence[1].length }
+      continue
+    }
+
+    const heading = line.match(/^ {0,3}(#{1,6})[\t ]+(.+?)\s*$/)
+    if (heading) {
+      const level = heading[1].length
+      const label = heading[2].replace(/[\t ]+#+[\t ]*$/, '').trim()
+      if (!label) continue
+      if (level === 1 && !titleFound) {
+        title = label.slice(0, 100)
+        titleFound = true
+        headings.length = 0
+        activeHeading = null
+      } else {
+        let parent = null
+        for (let parentLevel = level - 1; parentLevel > 0 && !parent; parentLevel -= 1) parent = headings[parentLevel] ?? null
+        const node = add(label, parent)
+        headings.splice(level)
+        headings[level] = node
+        activeHeading = node
+      }
+      list.length = 0
+      continue
+    }
+
+    const item = line.match(/^([\t ]*)(?:[-+*]|\d+[.)])[\t ]+(.+?)\s*$/)
+    if (item) {
+      const indent = indentOf(item[1])
+      while (list.length && list.at(-1).indent >= indent) list.pop()
+      const node = add(item[2], list.at(-1)?.node ?? activeHeading)
+      list.push({ indent, node })
+      continue
+    }
+
+    const leading = line.match(/^[\t ]*/)[0]
+    const owner = list.findLast((entry) => entry.indent < indentOf(leading))
+    if (owner && line.trim()) {
+      const note = line.trim().replace(/^>[\t ]/, '')
+      owner.node.data.note = `${owner.node.data.note} ${note}`.trim().slice(0, 200)
+    }
+  }
+
+  if (!nodes.length) throw new Error('The Markdown file has no headings or list items')
+  return {
+    version: 2,
+    title: title || String(fallbackTitle).trim().slice(0, 100) || nodes[0].data.label,
+    autoLayout: true,
+    nodes: layoutNodes(nodes, edges),
+    edges,
+  }
+}
+
 // First-run map: a short tour where each node demonstrates what it describes.
 export function starterMap() {
   const nodes = []
@@ -604,7 +711,7 @@ export function starterMap() {
 
   const maps = add(root, 'Your maps', { color: COLORS[3] })
   add(maps, 'Saved in this browser', { note: 'Nothing leaves your device' })
-  add(maps, 'Export to .mindmap or OPML')
+  add(maps, 'Export to .mindmap, OPML, or Markdown')
   add(maps, 'Press ? to see every shortcut')
 
   const map = { version: 2, title: 'Welcome to Mindspace', autoLayout: true, nodes, edges }

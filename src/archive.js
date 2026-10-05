@@ -144,6 +144,7 @@ export async function readMindmapFile(file) {
   const magic = new Uint8Array(await file.slice(0, 2).arrayBuffer())
   if (magic[0] !== 80 || magic[1] !== 75) {
     const text = await file.text()
+    if (/\.(?:md|markdown)$/i.test(file.name)) return { kind: 'markdown', text }
     return { kind: text.trimStart().startsWith('<') ? 'opml' : 'json', text }
   }
   if (file.size > MAX_ARCHIVE_BYTES) throw archiveError()

@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import * as mapModel from '../src/model.js'
 import { COLORS, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
 
+const parseMarkdown = mapModel.parseMarkdown ?? (() => ({ title: '', nodes: [], edges: [] }))
+const toMarkdown = mapModel.toMarkdown ?? (() => '')
+
 const image = {
   assetId: 'asset-1',
   name: 'diagram.png',
@@ -258,6 +261,118 @@ test('maps export to OPML as nested outlines', () => {
   assert.match(opml, /<title>A &#38; B<\/title>/)
   assert.match(opml, /<outline text="Root &#60;1&#62;">\n\s+<outline text="Child"[^>]*\/>\n\s+<\/outline>/)
   assert.match(opml, /<outline text="Other"\/>/)
+})
+
+test('Markdown headings and indented lists become branches', () => {
+  const map = parseMarkdown(`# Product plan
+
+## Launch
+- Prepare
+  Due Friday
+  - Review
+1. Publish
+### Follow-up
+- Measure
+`, 'notes')
+  const labels = new Map(map.nodes.map((node) => [node.id, node.data.label]))
+
+  assert.equal(map.title, 'Product plan')
+  assert.deepEqual(map.nodes.map((node) => node.data.label), ['Launch', 'Prepare', 'Review', 'Publish', 'Follow-up', 'Measure'])
+  assert.equal(map.nodes.find((node) => node.data.label === 'Prepare').data.note, 'Due Friday')
+  assert.deepEqual(map.edges.map((edge) => [labels.get(edge.source), labels.get(edge.target)]), [
+    ['Launch', 'Prepare'],
+    ['Prepare', 'Review'],
+    ['Launch', 'Publish'],
+    ['Launch', 'Follow-up'],
+    ['Follow-up', 'Measure'],
+  ])
+})
+
+test('Markdown without an H1 uses the supplied file title', () => {
+  const map = parseMarkdown(`## Decisions
+- Ship
+`, 'meeting-notes')
+
+  assert.equal(map.title, 'meeting-notes')
+  assert.deepEqual(map.nodes.map((node) => node.data.label), ['Decisions', 'Ship'])
+})
+
+test('maps export to Markdown without image data', () => {
+  const map = normalizeMap({
+    version: 3,
+    title: 'A & B',
+    nodes: [
+      { id: 'root', data: { label: 'Project', note: 'Q4' } },
+      { id: 'image', data: { label: '', image } },
+      { id: 'other', data: { label: 'Other' } },
+    ],
+    edges: [makeEdge('root', 'image'), makeEdge('image', 'other', 'link')],
+  })
+
+  assert.equal(toMarkdown(map), `# A & B
+
+- Project
+  > Q4
+  - [Image]
+- Other
+`)
+})
+
+test('Markdown round-trip preserves notes that look like structure', () => {
+  const notes = ['# status', '- detail', '* detail', '+ detail', '1. step', '2) step', '```js', '~~~', '\\# literal', '1\\. literal', '> quote']
+  const map = normalizeMap({
+    title: 'Notes',
+    nodes: notes.map((note, index) => ({ id: `node-${index}`, data: { label: `Node ${index + 1}`, note } })),
+    edges: [],
+  })
+
+  const imported = parseMarkdown(toMarkdown(map))
+
+  assert.deepEqual(imported.nodes.map((node) => node.data.label), [
+    'Node 1', 'Node 2', 'Node 3', 'Node 4', 'Node 5', 'Node 6', 'Node 7', 'Node 8', 'Node 9', 'Node 10', 'Node 11',
+  ])
+  assert.deepEqual(imported.nodes.map((node) => node.data.note), notes)
+  assert.equal(imported.edges.length, 0)
+})
+
+test('Markdown ignores headings and lists inside fenced code blocks', () => {
+  const map = parseMarkdown([
+    '# Notes',
+    '## Real',
+    '```md',
+    '### Fake heading',
+    '- Fake item',
+    '```',
+    '~~~',
+    '- Also fake',
+    '~~~',
+    '- Actual',
+  ].join('\n'))
+  const labels = new Map(map.nodes.map((node) => [node.id, node.data.label]))
+
+  assert.deepEqual(map.nodes.map((node) => node.data.label), ['Real', 'Actual'])
+  assert.deepEqual(map.edges.map((edge) => [labels.get(edge.source), labels.get(edge.target)]), [['Real', 'Actual']])
+})
+
+test('Markdown continuation text returns to its parent after a nested item', () => {
+  const map = parseMarkdown(`- Parent
+  first note
+  - Child
+    child note
+  second parent note
+`)
+
+  assert.deepEqual(map.nodes.map((node) => [node.data.label, node.data.note]), [
+    ['Parent', 'first note second parent note'],
+    ['Child', 'child note'],
+  ])
+})
+
+test('Markdown accepts a BOM before its H1 title', () => {
+  const map = parseMarkdown('\uFEFF# Notes\n\n- First', 'filename')
+
+  assert.equal(map.title, 'Notes')
+  assert.deepEqual(map.nodes.map((node) => node.data.label), ['First'])
 })
 
 test('document meta is formatted in English', () => {

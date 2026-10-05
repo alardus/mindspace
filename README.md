@@ -32,7 +32,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 - **Auto layout.** Branches to the right, on both sides, or as a tree, with smooth or straight lines and adjustable spacing. Turn it off to place nodes by hand.
 - **Branch palettes.** Bright, Calm, or Mono, plus per-branch colors inherited by children.
 - **Light and dark themes.** Follows your system or set manually; branch colors adapt to each theme.
-- **Import and export.** `.mindmap` files for backups (images included), OPML outlines for other tools.
+- **Import and export.** `.mindmap` files for backups (images included), plus OPML and Markdown outlines.
 - **Local-first.** Everything lives in your browser storage. No account, no server, no tracking.
 
 <details>
@@ -93,7 +93,7 @@ Issues and pull requests are welcome.
 Where things are:
 
 - `src/App.vue`: the app UI: canvas, toolbars, inspector, menus, and dialogs.
-- `src/model.js`: the map model: normalization, layout, palettes, OPML, and the welcome map.
+- `src/model.js`: the map model: normalization, layout, palettes, OPML/Markdown, and the welcome map.
 - `src/assets.js`, `src/archive.js`: local image storage and `.mindmap` archives.
 - `src/shortcuts.js`: the shortcut registry behind the key handlers and the help dialog.
 - `src/style.css`: styles and theme tokens.
