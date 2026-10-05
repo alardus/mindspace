@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SHORTCUTS, SHORTCUT_GROUPS, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from '../src/shortcuts.js'
+import * as shortcuts from '../src/shortcuts.js'
+
+const { SHORTCUTS, SHORTCUT_GROUPS, findShortcut, keyLabel, shortcutGroups, shortcutKeys } = shortcuts
 
 const key = (init) => ({ key: '', code: '', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...init })
 
@@ -62,4 +64,18 @@ test('branch copy and canvas paste are reference-only shortcuts', () => {
   assert.deepEqual(paste.keys, ['Ctrl', 'V'])
   assert.equal(findShortcut(key({ key: 'c', ctrlKey: true })), undefined)
   assert.equal(findShortcut(key({ key: 'v', ctrlKey: true })), undefined)
+})
+
+test('select all targets every visible canvas block', () => {
+  assert.equal(findShortcut(key({ key: 'a', metaKey: true }))?.id, 'selectAll')
+  assert.equal(findShortcut(key({ key: 'ф', code: 'KeyA', ctrlKey: true }))?.id, 'selectAll')
+  assert.equal(findShortcut(key({ key: 'a' })), undefined)
+
+  const nodes = [
+    { id: 'visible', hidden: false, selected: false },
+    { id: 'hidden', hidden: true, selected: true },
+  ]
+  assert.equal(typeof shortcuts.selectAllCanvasNodes, 'function')
+  shortcuts.selectAllCanvasNodes?.(nodes)
+  assert.deepEqual(nodes.map((node) => node.selected), [true, false])
 })

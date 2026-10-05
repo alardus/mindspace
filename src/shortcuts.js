@@ -51,6 +51,7 @@ export const SHORTCUTS = [
   { id: 'pan', group: 'Canvas', label: 'Pan', keys: [PAN_KEY, 'drag'] },
   { id: 'zoom', group: 'Canvas', label: 'Zoom', keys: ['Mod', 'wheel'] },
   { id: 'boxSelect', group: 'Canvas', label: 'Box select', keys: ['drag on canvas'] },
+  { id: 'selectAll', group: 'Canvas', label: 'Select all blocks', keys: ['Mod', 'A'], match: (event) => hasMod(event) && !event.shiftKey && !event.altKey && (letter(event) === 'a' || event.code === 'KeyA') },
   { id: 'deselect', group: 'Canvas', label: 'Deselect', keys: ['Esc'], match: (event) => event.key === 'Escape' },
   { id: 'collapse', group: 'Branches', label: 'Collapse', keys: ['Alt', '←'], match: (event) => event.altKey && event.key === 'ArrowLeft' },
   { id: 'expand', group: 'Branches', label: 'Expand', keys: ['Alt', '→'], match: (event) => event.altKey && event.key === 'ArrowRight' },
@@ -79,6 +80,8 @@ export const SHORTCUTS = [
 export function findShortcut(event) {
   return SHORTCUTS.find((shortcut) => shortcut.match?.(event))
 }
+
+export const selectAllCanvasNodes = (nodes) => nodes.forEach((node) => (node.selected = !node.hidden))
 
 export function shortcutKeys(id, mac = IS_MAC) {
   return (SHORTCUTS.find((shortcut) => shortcut.id === id)?.keys ?? []).map((key) => keyLabel(key, mac))

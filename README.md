@@ -47,6 +47,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 | Secondary line (while editing) | `Tab` or `Shift` `Enter` |
 | Delete node | `Del` |
 | Copy selected branches | `⌘` `C` |
+| Select all blocks | `⌘` `A` |
 | Paste on canvas | `⌘` `V` |
 | Move between nodes | `←` `↑` `→` `↓` |
 | Collapse / expand branch | `⌥` `←` / `⌥` `→` |

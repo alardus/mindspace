@@ -54,7 +54,7 @@ import {
   translateClipboardFragment,
 } from './clipboard.js'
 import Logo from './Logo.vue'
-import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
+import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
 const SHORTCUTS_TIP_KEY = 'mindspace-shortcuts-tip'
@@ -2005,6 +2005,7 @@ function runShortcut(id, event) {
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
     case 'help': return openHelp(event.target)
     case 'theme': return cycleTheme()
+    case 'selectAll': return selectAllCanvasNodes(nodes.value)
     case 'deselect':
       contextMenu.value = null
       closeMenus()
