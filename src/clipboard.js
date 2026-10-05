@@ -2,6 +2,8 @@ import { DEFAULT_SIZE, descendantsOf, makeEdge, makeNode } from './model.js'
 
 export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
+export class ClipboardPayloadError extends Error {}
+
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
 const cleanNode = (node) => ({
@@ -172,4 +174,138 @@ export function translateClipboardFragment(fragment, center) {
       position: { x: node.position.x + dx, y: node.position.y + dy },
     })),
   }
+}
+
+const decodeEntities = (value) => value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (_, entity) => {
+  if (entity[0] === '#') {
+    const code = Number.parseInt(entity.slice(entity[1]?.toLowerCase() === 'x' ? 2 : 1), entity[1]?.toLowerCase() === 'x' ? 16 : 10)
+    return Number.isFinite(code) ? String.fromCodePoint(code) : ''
+  }
+  return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[entity.toLowerCase()]
+})
+
+const cleanLabel = (value) => decodeEntities(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, 500)
+
+function fragmentFromItems(items, source, createId) {
+  const usable = items.map((item) => ({ label: cleanLabel(item.label), depth: Math.max(0, item.depth || 0) }))
+    .filter((item) => item.label)
+  if (!usable.length) throw new ClipboardPayloadError('The copied outline has no blocks')
+  const ids = usable.map(() => createId())
+  const parents = []
+  const roots = []
+  const nodes = usable.map((item, index) => {
+    const depth = Math.min(item.depth, parents.length)
+    const parent = depth ? parents[depth - 1] : null
+    parents.splice(depth)
+    parents[depth] = index
+    if (parent === null) roots.push(ids[index])
+    return makeNode(item.label, { x: depth * 280, y: index * 64 }, { id: ids[index], root: parent === null })
+  })
+  const edges = []
+  parents.length = 0
+  usable.forEach((item, index) => {
+    const depth = Math.min(item.depth, parents.length)
+    const parent = depth ? parents[depth - 1] : null
+    parents.splice(depth)
+    parents[depth] = index
+    if (parent !== null) edges.push(makeEdge(ids[parent], ids[index], 'tree', createId()))
+  })
+  return { source, roots, nodes, edges }
+}
+
+function attribute(tag, name) {
+  const match = tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i'))
+  return match?.[1] ?? match?.[2] ?? ''
+}
+
+function parseOpmlItems(xml) {
+  if (!/<opml\b/i.test(xml) || !/<body\b/i.test(xml)) throw new ClipboardPayloadError('The copied OPML is invalid')
+  const items = []
+  let depth = 0
+  for (const tag of xml.match(/<\/?outline\b[^>]*>/gi) ?? []) {
+    if (/^<\/outline/i.test(tag)) {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+    items.push({ label: attribute(tag, 'text') || attribute(tag, 'title'), depth })
+    if (!/\/\s*>$/.test(tag)) depth += 1
+  }
+  return items
+}
+
+function parseHtmlItems(html) {
+  if (!/<li\b/i.test(html)) return null
+  const items = []
+  const active = []
+  let listDepth = 0
+  for (const token of html.match(/<[^>]*>|[^<]+/g) ?? []) {
+    if (/^<(?:ul|ol)\b/i.test(token)) listDepth += 1
+    else if (/^<\/(?:ul|ol)\b/i.test(token)) listDepth = Math.max(0, listDepth - 1)
+    else if (/^<li\b/i.test(token)) {
+      const item = { label: '', depth: Math.max(0, listDepth - 1) }
+      items.push(item)
+      active.push(item)
+    } else if (/^<\/li\b/i.test(token)) active.pop()
+    else if (/^<br\b/i.test(token)) {
+      if (active.length) active.at(-1).label += ' '
+    } else if (!token.startsWith('<') && active.length) active.at(-1).label += token
+  }
+  return items
+}
+
+function depthsFromIndents(lines) {
+  const levels = []
+  return lines.map(({ label, indent }) => {
+    while (levels.length && levels.at(-1) >= indent) levels.pop()
+    const depth = indent > 0 ? levels.length : 0
+    levels.push(indent)
+    return { label, depth }
+  })
+}
+
+function parseTextItems(text) {
+  const lines = text.replace(/^\uFEFF/, '').replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+    .split('\n').filter((line) => line.trim())
+  const markdown = lines.map((line) => line.match(/^([\t ]*)(?:[-+*]|\d+[.)])[\t ]+(.+?)\s*$/))
+  if (lines.length && markdown.every(Boolean)) {
+    return depthsFromIndents(markdown.map((match) => ({
+      indent: match[1].replaceAll('\t', '    ').length,
+      label: match[2],
+    })))
+  }
+  const indented = lines.map((line) => line.match(/^([\t ]*)(\S.*)$/))
+  if (lines.length > 1 && indented.every(Boolean) && indented.some((match) => /\t| {2,}/.test(match[1]))) {
+    return depthsFromIndents(indented.map((match) => ({
+      indent: match[1].replaceAll('\t', '    ').length,
+      label: match[2],
+    })))
+  }
+  return null
+}
+
+export function parseClipboardData(data, createId = uid) {
+  const types = new Set(Array.from(data?.types ?? []))
+  if (types.has(MINDSPACE_CLIPBOARD_TYPE)) {
+    try {
+      return parseMindspaceClipboard(data.getData(MINDSPACE_CLIPBOARD_TYPE), createId)
+    } catch (error) {
+      throw new ClipboardPayloadError(error instanceof Error ? error.message : 'The copied Mindspace branch is invalid')
+    }
+  }
+
+  const xmlType = ['text/x-opml', 'application/xml', 'text/xml'].find((type) => types.has(type))
+  const text = String(data?.getData?.('text/plain') ?? '')
+  const xml = xmlType ? data.getData(xmlType) : /^\s*(?:<\?xml[^>]*>\s*)?<opml\b/i.test(text) ? text : ''
+  if (xml) return fragmentFromItems(parseOpmlItems(xml), 'opml', createId)
+
+  const html = types.has('text/html') ? data.getData('text/html') : ''
+  const htmlItems = html && parseHtmlItems(html)
+  if (htmlItems?.length) return fragmentFromItems(htmlItems, 'html', createId)
+
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const outline = parseTextItems(trimmed)
+  if (outline) return fragmentFromItems(outline, 'outline', createId)
+  const node = makeNode(trimmed.slice(0, 500), { x: 0, y: 0 }, { id: createId(), root: true })
+  return { source: 'text', roots: [node.id], nodes: [node], edges: [] }
 }
