@@ -45,6 +45,7 @@ import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, 
 import {
   ClipboardPayloadError,
   MINDSPACE_CLIPBOARD_TYPE,
+  assertClipboardAssetCapacity,
   assertClipboardCapacity,
   clipboardImageFiles,
   isEditableClipboardTarget,
@@ -520,10 +521,12 @@ async function onPaste(event) {
   const documentAtStart = activeId.value
   try {
     const assetIds = new Set(fragment.nodes.flatMap((node) => node.data.image?.assetId ? [node.data.image.assetId] : []))
+    assertClipboardAssetCapacity(referencedAssetIds(cleanMap()), assetIds)
     const assets = await Promise.all([...assetIds].map((assetId) => loadImageAsset(assetId)))
     if (assets.some((asset) => !asset)) throw new ClipboardPayloadError('A copied image is no longer available')
     if (activeId.value !== documentAtStart) return notify('Content was not pasted because the map changed.')
     assertClipboardCapacity(nodes.value.length, fragment.nodes.length)
+    assertClipboardAssetCapacity(referencedAssetIds(cleanMap()), assetIds)
 
     if (fragment.source !== 'mindspace') {
       fragment = { ...fragment, nodes: layoutNodes(fragment.nodes, fragment.edges, () => null, settings.value) }

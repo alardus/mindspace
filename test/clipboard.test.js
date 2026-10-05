@@ -4,6 +4,7 @@ import { makeEdge, makeNode } from '../src/model.js'
 import {
   ClipboardPayloadError,
   MINDSPACE_CLIPBOARD_TYPE,
+  assertClipboardAssetCapacity,
   assertClipboardCapacity,
   clipboardImageFiles,
   isEditableClipboardTarget,
@@ -112,6 +113,21 @@ test('normalizes broken and cyclic tree edges to a finite forest', () => {
 
   assert.deepEqual(fragment.roots, ['new-1', 'new-3'])
   assert.deepEqual(fragment.edges.map((edge) => [edge.source, edge.target]), [['new-1', 'new-2']])
+})
+
+test('rejects an empty block with an invalid image reference', () => {
+  const payload = JSON.stringify({
+    version: 1,
+    roots: ['image'],
+    nodes: [{
+      id: 'image',
+      position: { x: 0, y: 0 },
+      data: { label: '', image: { assetId: 'asset', name: 'bad.svg', mime: 'image/svg+xml', naturalWidth: 10, naturalHeight: 10 } },
+    }],
+    edges: [],
+  })
+
+  assert.throws(() => parseMindspaceClipboard(payload, ids()), /invalid/)
 })
 
 test('translates fragment bounds around a requested center', () => {
@@ -227,14 +243,24 @@ test('returns null for empty clipboard data', () => {
 
 test('recognizes editable clipboard targets', () => {
   const target = (kind) => ({
-    closest: (selector) => selector.includes(kind) ? { kind } : null,
+    closest: (selector) => selector.includes(kind === 'contenteditable' ? '[contenteditable]' : kind) ? { kind } : null,
   })
 
   assert.equal(isEditableClipboardTarget(target('input')), true)
   assert.equal(isEditableClipboardTarget(target('textarea')), true)
-  assert.equal(isEditableClipboardTarget(target('[contenteditable="true"]')), true)
+  assert.equal(isEditableClipboardTarget(target('contenteditable')), true)
   assert.equal(isEditableClipboardTarget(target('button')), false)
   assert.equal(isEditableClipboardTarget(null), false)
+})
+
+test('recognizes every enabled contenteditable form', () => {
+  const target = (value) => ({
+    closest: (selector) => selector.includes('[contenteditable]:not([contenteditable="false"])') && value !== 'false' ? { value } : null,
+  })
+
+  assert.equal(isEditableClipboardTarget(target('')), true)
+  assert.equal(isEditableClipboardTarget(target('plaintext-only')), true)
+  assert.equal(isEditableClipboardTarget(target('false')), false)
 })
 
 test('fits an imported group without changing relative positions', () => {
@@ -257,6 +283,13 @@ test('fits an imported group without changing relative positions', () => {
 test('refuses a fragment that would exceed the map limit', () => {
   assert.doesNotThrow(() => assertClipboardCapacity(4999, 1))
   assert.throws(() => assertClipboardCapacity(4999, 2), /5,000 blocks/)
+})
+
+test('refuses clipboard images that would exceed the asset limit', () => {
+  const existing = new Set(Array.from({ length: 99 }, (_, index) => `asset-${index}`))
+
+  assert.doesNotThrow(() => assertClipboardAssetCapacity(existing, new Set(['asset-1', 'asset-99'])))
+  assert.throws(() => assertClipboardAssetCapacity(existing, new Set(['asset-99', 'asset-100'])), /100 images/)
 })
 
 test('finds image files before clipboard text is parsed', () => {

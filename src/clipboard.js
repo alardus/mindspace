@@ -4,10 +4,16 @@ export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
 export class ClipboardPayloadError extends Error {}
 
-export const isEditableClipboardTarget = (target) => Boolean(target?.closest?.('input, textarea, [contenteditable="true"]'))
+export const isEditableClipboardTarget = (target) => Boolean(target?.closest?.('input, textarea, [contenteditable]:not([contenteditable="false"])'))
 
 export function assertClipboardCapacity(currentCount, incomingCount, limit = 5000) {
   if (currentCount + incomingCount > limit) throw new ClipboardPayloadError('A map can contain up to 5,000 blocks')
+}
+
+export function assertClipboardAssetCapacity(existingIds, incomingIds, limit = 100) {
+  const combined = new Set(existingIds)
+  for (const id of incomingIds) combined.add(id)
+  if (combined.size > limit) throw new ClipboardPayloadError('A map can contain up to 100 images')
 }
 
 export const clipboardImageFiles = (data) => Array.from(data?.items ?? [])
@@ -133,12 +139,13 @@ export function parseMindspaceClipboard(json, createId = uid) {
   for (const item of input.nodes) {
     if (typeof item?.id !== 'string' || !item.id || originalIds.has(item.id)) continue
     const label = typeof item.data?.label === 'string' ? item.data.label.slice(0, 500) : ''
-    if (!label.trim() && !item.data?.image) continue
-    originalIds.add(item.id)
-    sourceNodes.push(makeNode(label, {
+    const node = makeNode(label, {
       x: Number.isFinite(item.position?.x) ? item.position.x : 0,
       y: Number.isFinite(item.position?.y) ? item.position.y : 0,
-    }, { id: item.id, ...item.data }))
+    }, { id: item.id, ...item.data })
+    if (!node.data.label.trim() && !node.data.image) continue
+    originalIds.add(item.id)
+    sourceNodes.push(node)
   }
   if (!sourceNodes.length) throw new Error('The copied Mindspace branch is invalid')
   const sourceEdges = normalizedEdges(input.edges, originalIds)
