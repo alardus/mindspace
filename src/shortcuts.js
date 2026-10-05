@@ -40,6 +40,8 @@ export const SHORTCUTS = [
       && ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key),
   },
   { id: 'typeToEdit', group: 'Nodes', label: 'Edit selected node', keys: ['type'] },
+  { id: 'copyBranch', group: 'Nodes', label: 'Copy branch', keys: ['Mod', 'C'] },
+  { id: 'paste', group: 'Nodes', label: 'Paste on canvas', keys: ['Mod', 'V'] },
   // { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
   { id: 'remove', group: 'Nodes', label: 'Delete node', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
   { id: 'link', group: 'Nodes', label: 'Link nodes', keys: ['drag from edge'] },

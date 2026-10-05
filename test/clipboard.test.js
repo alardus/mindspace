@@ -4,6 +4,9 @@ import { makeEdge, makeNode } from '../src/model.js'
 import {
   ClipboardPayloadError,
   MINDSPACE_CLIPBOARD_TYPE,
+  assertClipboardCapacity,
+  clipboardImageFiles,
+  isEditableClipboardTarget,
   parseClipboardData,
   parseMindspaceClipboard,
   serializeClipboardBranches,
@@ -220,4 +223,52 @@ test('keeps multiline prose in one root', () => {
 
 test('returns null for empty clipboard data', () => {
   assert.equal(parseClipboardData(clipboard({ 'text/plain': ' \n ' }), ids()), null)
+})
+
+test('recognizes editable clipboard targets', () => {
+  const target = (kind) => ({
+    closest: (selector) => selector.includes(kind) ? { kind } : null,
+  })
+
+  assert.equal(isEditableClipboardTarget(target('input')), true)
+  assert.equal(isEditableClipboardTarget(target('textarea')), true)
+  assert.equal(isEditableClipboardTarget(target('[contenteditable="true"]')), true)
+  assert.equal(isEditableClipboardTarget(target('button')), false)
+  assert.equal(isEditableClipboardTarget(null), false)
+})
+
+test('fits an imported group without changing relative positions', () => {
+  const fragment = {
+    source: 'outline',
+    roots: ['root'],
+    nodes: [
+      makeNode('Root', { x: 10, y: 20 }, { id: 'root', root: true }),
+      makeNode('Child', { x: 310, y: 120 }, { id: 'child' }),
+    ],
+    edges: [makeEdge('root', 'child', 'tree', 'edge')],
+  }
+
+  const translated = translateClipboardFragment(fragment, { x: 800, y: 450 })
+
+  assert.equal(translated.nodes[1].position.x - translated.nodes[0].position.x, 300)
+  assert.equal(translated.nodes[1].position.y - translated.nodes[0].position.y, 100)
+})
+
+test('refuses a fragment that would exceed the map limit', () => {
+  assert.doesNotThrow(() => assertClipboardCapacity(4999, 1))
+  assert.throws(() => assertClipboardCapacity(4999, 2), /5,000 blocks/)
+})
+
+test('finds image files before clipboard text is parsed', () => {
+  const file = new File(['png'], 'image.png', { type: 'image/png' })
+  const data = {
+    types: ['text/plain', 'Files'],
+    items: [
+      { kind: 'string', type: 'text/plain', getAsFile: () => null },
+      { kind: 'file', type: 'image/png', getAsFile: () => file },
+    ],
+    getData: () => 'Text fallback',
+  }
+
+  assert.deepEqual(clipboardImageFiles(data), [file])
 })

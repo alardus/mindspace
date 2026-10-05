@@ -4,6 +4,17 @@ export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
 export class ClipboardPayloadError extends Error {}
 
+export const isEditableClipboardTarget = (target) => Boolean(target?.closest?.('input, textarea, [contenteditable="true"]'))
+
+export function assertClipboardCapacity(currentCount, incomingCount, limit = 5000) {
+  if (currentCount + incomingCount > limit) throw new ClipboardPayloadError('A map can contain up to 5,000 blocks')
+}
+
+export const clipboardImageFiles = (data) => Array.from(data?.items ?? [])
+  .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+  .map((item) => item.getAsFile())
+  .filter(Boolean)
+
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
 const cleanNode = (node) => ({

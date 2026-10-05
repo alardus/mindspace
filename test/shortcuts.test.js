@@ -52,3 +52,14 @@ test('help groups cover every registry entry in group order', () => {
   assert.deepEqual(groups.find((group) => group.title === 'Maps').items
     .map((item) => item.id), ['mapNavigate', 'mapOpen', 'mapRename', 'mapDuplicate', 'mapDelete', 'mapMenu'])
 })
+
+test('branch copy and canvas paste are reference-only shortcuts', () => {
+  const items = shortcutGroups(false).find((group) => group.title === 'Nodes').items
+  const copy = items.find((item) => item.id === 'copyBranch')
+  const paste = items.find((item) => item.id === 'paste')
+
+  assert.deepEqual(copy.keys, ['Ctrl', 'C'])
+  assert.deepEqual(paste.keys, ['Ctrl', 'V'])
+  assert.equal(findShortcut(key({ key: 'c', ctrlKey: true })), undefined)
+  assert.equal(findShortcut(key({ key: 'v', ctrlKey: true })), undefined)
+})

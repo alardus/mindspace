@@ -42,6 +42,16 @@ import {
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
+import {
+  ClipboardPayloadError,
+  MINDSPACE_CLIPBOARD_TYPE,
+  assertClipboardCapacity,
+  clipboardImageFiles,
+  isEditableClipboardTarget,
+  parseClipboardData,
+  serializeClipboardBranches,
+  translateClipboardFragment,
+} from './clipboard.js'
 import Logo from './Logo.vue'
 import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
@@ -470,18 +480,76 @@ async function addImageFile(file, center) {
   }
 }
 
-function onPaste(event) {
-  if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return
-  const files = [...(event.clipboardData?.items ?? [])]
-    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-    .map((item) => item.getAsFile())
-    .filter(Boolean)
-  if (!files.length) return
+function onCopy(event) {
+  if (isEditableClipboardTarget(event.target) || !selectedNodes.value.length || !event.clipboardData) return
+  try {
+    const copied = serializeClipboardBranches(nodes.value, edges.value, selectedNodes.value.map((node) => node.id))
+    event.clipboardData.setData(MINDSPACE_CLIPBOARD_TYPE, copied.custom)
+    event.clipboardData.setData('text/plain', copied.text)
+    event.preventDefault()
+    notify(`Copied ${pluralNodes(copied.count)}`)
+  } catch {
+    notify('The selected branch could not be copied')
+  }
+}
+
+async function onPaste(event) {
+  if (isEditableClipboardTarget(event.target)) return
+  const files = clipboardImageFiles(event.clipboardData)
+  if (files.length) {
+    event.preventDefault()
+    if (files.length !== 1) return notify('Paste one image at a time.')
+    const bounds = canvasElement.value?.getBoundingClientRect()
+    if (!bounds) return
+    addImageFile(files[0], screenToFlowCoordinate({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }))
+    return
+  }
+  if (!event.clipboardData) return
+
+  let fragment
+  try {
+    fragment = parseClipboardData(event.clipboardData)
+    if (!fragment) return
+    assertClipboardCapacity(nodes.value.length, fragment.nodes.length)
+  } catch (error) {
+    event.preventDefault()
+    return notify(error instanceof ClipboardPayloadError ? error.message : 'The clipboard content could not be pasted')
+  }
+
   event.preventDefault()
-  if (files.length !== 1) return notify('Paste one image at a time.')
-  const bounds = canvasElement.value?.getBoundingClientRect()
-  if (!bounds) return
-  addImageFile(files[0], screenToFlowCoordinate({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }))
+  const documentAtStart = activeId.value
+  try {
+    const assetIds = new Set(fragment.nodes.flatMap((node) => node.data.image?.assetId ? [node.data.image.assetId] : []))
+    const assets = await Promise.all([...assetIds].map((assetId) => loadImageAsset(assetId)))
+    if (assets.some((asset) => !asset)) throw new ClipboardPayloadError('A copied image is no longer available')
+    if (activeId.value !== documentAtStart) return notify('Content was not pasted because the map changed.')
+    assertClipboardCapacity(nodes.value.length, fragment.nodes.length)
+
+    if (fragment.source !== 'mindspace') {
+      fragment = { ...fragment, nodes: layoutNodes(fragment.nodes, fragment.edges, () => null, settings.value) }
+    }
+    const bounds = canvasElement.value?.getBoundingClientRect()
+    if (!bounds) return
+    const center = screenToFlowCoordinate({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
+    fragment = translateClipboardFragment(fragment, center)
+
+    const before = snapshot()
+    const roots = new Set(fragment.roots)
+    nodes.value.forEach((node) => (node.selected = false))
+    fragment.nodes.forEach((node) => (node.selected = roots.has(node.id)))
+    nodes.value.push(...fragment.nodes)
+    edges.value.push(...fragment.edges)
+    orient()
+    if (autoLayout.value) relayout(false, false, false, fragment.roots[0])
+    else applyVisibility()
+    for (const asset of assets) {
+      if (asset && !imageUrls.has(asset.image.assetId)) imageUrls.set(asset.image.assetId, URL.createObjectURL(asset.blob))
+    }
+    record(before)
+    notify(`Pasted ${pluralNodes(fragment.nodes.length)}`)
+  } catch (error) {
+    notify(error instanceof ClipboardPayloadError ? error.message : 'The clipboard content could not be pasted')
+  }
 }
 
 function onImageDrop(event) {
@@ -2067,6 +2135,7 @@ onMounted(() => {
   pruneImageAssets(usedAssets).catch(() => {})
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
+  window.addEventListener('copy', onCopy)
   window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
   window.addEventListener('resize', placeSearch)
@@ -2088,6 +2157,7 @@ function showShortcutsTip() {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
+  window.removeEventListener('copy', onCopy)
   window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
   window.removeEventListener('resize', placeSearch)
