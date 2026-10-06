@@ -1,5 +1,10 @@
 export const STORAGE_KEY = 'mindspace-map-v1'
 export const LIBRARY_STORAGE_KEY = 'mindspace-library-v1'
+export const MAX_LABEL_LENGTH = 10_000
+export const blockPreview = (text) => {
+  const symbols = [...text]
+  return symbols.length > 1000 ? `${symbols.slice(0, 1000).join('')}...` : text
+}
 export const PALETTES = {
   bright: { name: 'Bright', colors: ['#E9A23B', '#3AAA97', '#4F95D9', '#A479D1', '#E0675D', '#5BA35F'] },
   calm: { name: 'Calm', colors: ['#C9A26B', '#7FA89E', '#7E9CBF', '#A495B8', '#C4877F', '#8FA77F'] },
@@ -462,7 +467,7 @@ export function normalizeMap(input) {
     ids.add(id)
     const image = normalizeImageReference(node?.data?.image)
     const label = typeof node?.data?.label === 'string'
-      ? node.data.label.slice(0, 500)
+      ? node.data.label.slice(0, MAX_LABEL_LENGTH)
       : input.version === 3 && image ? '' : `Idea ${index + 1}`
     if (input.version === 3 && !label.trim() && !image) throw new Error('The map contains an empty block')
     return makeNode(
@@ -643,7 +648,7 @@ export function parseMarkdown(text, fallbackTitle = 'Untitled') {
   let rootIndex = 0
   const add = (label, parent = null) => {
     if (nodes.length >= 5000) throw new Error('The Markdown file has more than 5000 nodes')
-    const node = makeNode(label.trim().slice(0, 500), undefined, {
+    const node = makeNode(label.trim().slice(0, MAX_LABEL_LENGTH), undefined, {
       color: parent?.data.color ?? branchColor(rootIndex++),
     })
     nodes.push(node)

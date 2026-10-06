@@ -5,6 +5,7 @@ import { COLORS, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETT
 
 const parseMarkdown = mapModel.parseMarkdown ?? (() => ({ title: '', nodes: [], edges: [] }))
 const toMarkdown = mapModel.toMarkdown ?? (() => '')
+const blockPreview = mapModel.blockPreview ?? ((text) => text)
 
 const image = {
   assetId: 'asset-1',
@@ -13,6 +14,15 @@ const image = {
   naturalWidth: 1200,
   naturalHeight: 800,
 }
+
+test('block preview hides text after 1000 characters without discarding it', () => {
+  const long = `${'a'.repeat(1000)}b`
+
+  assert.equal(blockPreview('a'.repeat(1000)), 'a'.repeat(1000))
+  assert.equal(blockPreview('🙂'.repeat(1000)), '🙂'.repeat(1000))
+  assert.equal(blockPreview(long), `${'a'.repeat(1000)}...`)
+  assert.equal(normalizeMap({ version: 2, nodes: [{ data: { label: long } }], edges: [] }).nodes[0].data.label, long)
+})
 
 test('image-only nodes survive a version 3 round-trip', () => {
   const map = normalizeMap({

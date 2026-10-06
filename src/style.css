@@ -374,7 +374,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .drag-preview { position: absolute; inset: 0; z-index: 5; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .drag-preview line { stroke: var(--guide); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .drag-preview path { fill: none; stroke-width: 2; stroke-linecap: round; }
-.node-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 15px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.node-title { font-size: 15px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
 .node-note { overflow: hidden; color: var(--muted); font-size: 13px; line-height: 18px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .mind-node.deep .node-title { font-size: 14px; font-weight: 400; }
 .mind-node.deep .node-note { font-size: 12px; }

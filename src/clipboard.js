@@ -1,4 +1,4 @@
-import { DEFAULT_SIZE, descendantsOf, makeEdge, makeNode, selectedBranchRoots } from './model.js'
+import { DEFAULT_SIZE, MAX_LABEL_LENGTH, descendantsOf, makeEdge, makeNode, selectedBranchRoots } from './model.js'
 
 export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
@@ -128,7 +128,7 @@ export function parseMindspaceClipboard(json, createId = uid) {
   const sourceNodes = []
   for (const item of input.nodes) {
     if (typeof item?.id !== 'string' || !item.id || originalIds.has(item.id)) continue
-    const label = typeof item.data?.label === 'string' ? item.data.label.slice(0, 500) : ''
+    const label = typeof item.data?.label === 'string' ? item.data.label.slice(0, MAX_LABEL_LENGTH) : ''
     const node = makeNode(label, {
       x: Number.isFinite(item.position?.x) ? item.position.x : 0,
       y: Number.isFinite(item.position?.y) ? item.position.y : 0,
@@ -192,7 +192,7 @@ const decodeEntities = (value) => value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quo
   return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[entity.toLowerCase()]
 })
 
-const cleanLabel = (value) => decodeEntities(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, 500)
+const cleanLabel = (value) => decodeEntities(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL_LENGTH)
 
 function fragmentFromItems(items, source, createId) {
   const usable = items.map((item) => ({ label: cleanLabel(item.label), depth: Math.max(0, item.depth || 0) }))
@@ -319,6 +319,6 @@ export function parseClipboardData(data, createId = uid) {
   if (!trimmed) return null
   const outline = parseTextItems(trimmed)
   if (outline) return fragmentFromItems(outline, 'outline', createId)
-  const node = makeNode(trimmed.slice(0, 500), { x: 0, y: 0 }, { id: createId(), root: true })
+  const node = makeNode(trimmed.slice(0, MAX_LABEL_LENGTH), { x: 0, y: 0 }, { id: createId(), root: true })
   return { source: 'text', roots: [node.id], nodes: [node], edges: [] }
 }

@@ -4,8 +4,10 @@ import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, ge
 import {
   DEFAULT_SIZE,
   LIBRARY_STORAGE_KEY,
+  MAX_LABEL_LENGTH,
   PALETTES,
   STORAGE_KEY,
+  blockPreview,
   branchColor,
   descendantsOf,
   highlightParts,
@@ -637,7 +639,7 @@ function finishEditing(save = true) {
   const node = nodes.value.find((item) => item.id === editingId.value)
   const label = editDraft.value.label.trim()
   if (save && node && label) {
-    node.data.label = label.slice(0, 500)
+    node.data.label = label.slice(0, MAX_LABEL_LENGTH)
     node.data.note = editDraft.value.note.trim().slice(0, 200)
   }
   editingId.value = null
@@ -2286,7 +2288,7 @@ onBeforeUnmount(() => {
                   class="node-title"
                   name="node-text"
                   rows="1"
-                  maxlength="500"
+                  :maxlength="MAX_LABEL_LENGTH"
                   aria-label="Node title"
                   @keydown.enter.exact.prevent="finishEditing()"
                   @keydown.shift.enter.prevent="focusNoteEditor(id)"
@@ -2307,7 +2309,7 @@ onBeforeUnmount(() => {
                 />
               </div>
               <template v-else>
-                <span v-if="data.label" class="node-title"><template v-for="(part, index) in searchParts(id, data.label)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="data.label" class="node-title"><template v-for="(part, index) in searchParts(id, blockPreview(data.label))" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 <span v-if="data.note" class="node-note"><template v-for="(part, index) in searchParts(id, data.note)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
               </template>
               <button
@@ -2661,7 +2663,7 @@ onBeforeUnmount(() => {
                 :value="primaryNode.data.label"
                 name="panel-node-title"
                 aria-label="Title"
-                maxlength="500"
+                :maxlength="MAX_LABEL_LENGTH"
                 @focus="beginPanelEdit"
                 @input="primaryNode.data.label = $event.target.value"
                 @blur="endPanelEdit(primaryNode)"
