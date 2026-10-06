@@ -22,7 +22,7 @@ export function keyLabel(key, mac = IS_MAC) {
   return names ? names[mac ? 0 : 1] : key
 }
 
-const hasMod = (event) => event.metaKey || event.ctrlKey
+export const hasMod = (event) => event.metaKey || event.ctrlKey
 const letter = (event) => event.key.toLowerCase()
 
 export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Maps', 'General']

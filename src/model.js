@@ -5,6 +5,20 @@ export const blockPreview = (text) => {
   const symbols = [...text]
   return symbols.length > 1000 ? `${symbols.slice(0, 1000).join('')}...` : text
 }
+
+export function linkParts(text) {
+  const parts = []
+  let from = 0
+  for (const match of text.matchAll(/https?:\/\/[^\s<]+/giu)) {
+    const href = match[0].replace(/[),.;:!?\]}'"’”]+$/u, '')
+    if (!URL.canParse(href)) continue
+    if (match.index > from) parts.push({ text: text.slice(from, match.index) })
+    parts.push({ text: href, href })
+    from = match.index + href.length
+  }
+  if (from < text.length) parts.push({ text: text.slice(from) })
+  return parts
+}
 export const PALETTES = {
   bright: { name: 'Bright', colors: ['#E9A23B', '#3AAA97', '#4F95D9', '#A479D1', '#E0675D', '#5BA35F'] },
   calm: { name: 'Calm', colors: ['#C9A26B', '#7FA89E', '#7E9CBF', '#A495B8', '#C4877F', '#8FA77F'] },

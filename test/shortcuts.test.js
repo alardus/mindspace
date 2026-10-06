@@ -34,6 +34,12 @@ test('modifier names follow the platform', () => {
   assert.deepEqual(shortcutKeys('zoom', false), ['Ctrl', 'wheel'])
 })
 
+test('primary modifier accepts Cmd and Ctrl clicks', () => {
+  assert.equal(shortcuts.hasMod?.(key({ metaKey: true })), true)
+  assert.equal(shortcuts.hasMod?.(key({ ctrlKey: true })), true)
+  assert.equal(shortcuts.hasMod?.(key({})), false)
+})
+
 test('help groups cover every registry entry in group order', () => {
   const groups = shortcutGroups(false)
   assert.deepEqual(groups.map((group) => group.title), SHORTCUT_GROUPS)

@@ -27,6 +27,16 @@ test('block preview hides text after 1000 characters without discarding it', () 
   assert.equal(normalizeMap({ version: 2, nodes: [{ data: { label: long } }], edges: [] }).nodes[0].data.label, long)
 })
 
+test('block text separates web links from surrounding punctuation', () => {
+  assert.deepEqual(mapModel.linkParts?.('Docs: https://example.com/guide, mirror: http://example.org.'), [
+    { text: 'Docs: ' },
+    { text: 'https://example.com/guide', href: 'https://example.com/guide' },
+    { text: ', mirror: ' },
+    { text: 'http://example.org', href: 'http://example.org' },
+    { text: '.' },
+  ])
+})
+
 test('attachment proximity follows the cursor beside any part of a block', () => {
   const target = { x: 300, y: 100, width: 80, height: 30 }
 

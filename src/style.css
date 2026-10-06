@@ -376,6 +376,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .drag-preview path { fill: none; stroke-width: 2; stroke-linecap: round; }
 .node-title { font-size: 15px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
 .node-note { overflow: hidden; color: var(--muted); font-size: 13px; line-height: 18px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.node-link { color: inherit; cursor: pointer; text-decoration-color: var(--branch); text-decoration-thickness: 2px; text-underline-offset: 2px; }
 .mind-node.deep .node-title { font-size: 14px; font-weight: 400; }
 .mind-node.deep .node-note { font-size: 12px; }
 

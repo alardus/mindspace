@@ -17,6 +17,7 @@ import {
   insertTreeEdgeAfter,
   layoutVerticalGap,
   layoutNodes,
+  linkParts,
   makeEdge,
   makeNode,
   mergeImageNode,
@@ -62,7 +63,7 @@ import {
   translateClipboardFragment,
 } from './clipboard.js'
 import Logo from './Logo.vue'
-import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
+import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasMod, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
 const SHORTCUTS_TIP_KEY = 'mindspace-shortcuts-tip'
@@ -1002,6 +1003,10 @@ const searchState = (id) => searchMarks.get(id)?.state
 const searchParts = (id, text) => {
   const mark = searchMarks.get(id)
   return mark && mark.state !== 'path' ? highlightParts(text, mark.term) : [{ text, match: false }]
+}
+const displayParts = (id, text) => linkParts(text).map((part) => ({ ...part, search: searchParts(id, part.text) }))
+const onTextLinkClick = (event) => {
+  if (!hasMod(event)) event.preventDefault()
 }
 
 // Centered over the visible canvas; if it would run into the side islands, it moves below the toolbar.
@@ -2328,8 +2333,28 @@ onBeforeUnmount(() => {
                 />
               </div>
               <template v-else>
-                <span v-if="data.label" class="node-title"><template v-for="(part, index) in searchParts(id, blockPreview(data.label))" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
-                <span v-if="data.note" class="node-note"><template v-for="(part, index) in searchParts(id, data.note)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="data.label" class="node-title"><component
+                  :is="part.href ? 'a' : 'span'"
+                  v-for="(part, index) in displayParts(id, blockPreview(data.label))"
+                  :key="index"
+                  :class="{ 'node-link': part.href, nodrag: part.href }"
+                  :href="part.href"
+                  :target="part.href ? '_blank' : undefined"
+                  :rel="part.href ? 'noopener' : undefined"
+                  :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
+                  @click="part.href && onTextLinkClick($event)"
+                ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                <span v-if="data.note" class="node-note"><component
+                  :is="part.href ? 'a' : 'span'"
+                  v-for="(part, index) in displayParts(id, data.note)"
+                  :key="index"
+                  :class="{ 'node-link': part.href, nodrag: part.href }"
+                  :href="part.href"
+                  :target="part.href ? '_blank' : undefined"
+                  :rel="part.href ? 'noopener' : undefined"
+                  :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
+                  @click="part.href && onTextLinkClick($event)"
+                ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
               </template>
               <div
                 v-if="!data.root || hasChildren(id)"
