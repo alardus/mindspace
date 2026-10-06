@@ -23,6 +23,7 @@ export function keyLabel(key, mac = IS_MAC) {
 }
 
 export const hasMod = (event) => event.metaKey || event.ctrlKey
+export const hasLinkMod = (event, mac = IS_MAC) => mac ? event.metaKey : event.ctrlKey
 const letter = (event) => event.key.toLowerCase()
 
 export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Maps', 'General']
@@ -44,7 +45,7 @@ export const SHORTCUTS = [
   { id: 'paste', group: 'Nodes', label: 'Paste on canvas', keys: ['Mod', 'V'] },
   // { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
   { id: 'remove', group: 'Nodes', label: 'Delete node', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
-  { id: 'link', group: 'Nodes', label: 'Link nodes', keys: ['drag from edge'] },
+  { id: 'link', group: 'Nodes', label: 'Link nodes', keys: ['Mod', 'drag from edge'] },
   { id: 'noteLine', group: 'Editing', label: 'Description field', keys: ['Tab'], bindings: [['Tab'], ['Shift', 'Enter']] },
   { id: 'finishEdit', group: 'Editing', label: 'Finish editing', keys: ['Enter'] },
   { id: 'cancelEdit', group: 'Editing', label: 'Cancel editing', keys: ['Esc'] },

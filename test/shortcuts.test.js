@@ -40,6 +40,15 @@ test('primary modifier accepts Cmd and Ctrl clicks', () => {
   assert.equal(shortcuts.hasMod?.(key({})), false)
 })
 
+test('link gesture uses the primary modifier for the current platform', () => {
+  assert.equal(shortcuts.hasLinkMod?.(key({ metaKey: true }), true), true)
+  assert.equal(shortcuts.hasLinkMod?.(key({ ctrlKey: true }), true), false)
+  assert.equal(shortcuts.hasLinkMod?.(key({ ctrlKey: true }), false), true)
+  assert.equal(shortcuts.hasLinkMod?.(key({ metaKey: true }), false), false)
+  assert.deepEqual(shortcutKeys('link', true), ['⌘', 'drag from edge'])
+  assert.deepEqual(shortcutKeys('link', false), ['Ctrl', 'drag from edge'])
+})
+
 test('help groups cover every registry entry in group order', () => {
   const groups = shortcutGroups(false)
   assert.deepEqual(groups.map((group) => group.title), SHORTCUT_GROUPS)

@@ -63,7 +63,7 @@ import {
   translateClipboardFragment,
 } from './clipboard.js'
 import Logo from './Logo.vue'
-import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasMod, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
+import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
 const SHORTCUTS_TIP_KEY = 'mindspace-shortcuts-tip'
@@ -191,6 +191,9 @@ const INSPECTOR_SPACE = 12 + 320 + 12
 const easeOut = (t) => 1 - (1 - t) ** 3
 const canvasElement = ref(null)
 const alignmentGuides = ref([])
+const linkModifierHeld = ref(false)
+const onLinkModifierKeyup = (event) => (linkModifierHeld.value = hasLinkMod(event))
+const clearLinkModifier = () => (linkModifierHeld.value = false)
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
 function focusMap(duration = 300) {
@@ -2052,6 +2055,7 @@ function runShortcut(id, event) {
 }
 
 function onKeydown(event) {
+  linkModifierHeld.value = hasLinkMod(event)
   const target = event.target
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
   if (target instanceof HTMLElement && target.isContentEditable) return
@@ -2178,6 +2182,8 @@ onMounted(() => {
   pruneImageAssets(usedAssets).catch(() => {})
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
+  window.addEventListener('keyup', onLinkModifierKeyup)
+  window.addEventListener('blur', clearLinkModifier)
   window.addEventListener('copy', onCopy)
   window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
@@ -2200,6 +2206,8 @@ function showShortcutsTip() {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
+  window.removeEventListener('keyup', onLinkModifierKeyup)
+  window.removeEventListener('blur', clearLinkModifier)
   window.removeEventListener('copy', onCopy)
   window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
@@ -2219,7 +2227,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @dragover.prevent @drop.prevent="onImageDrop">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, 'link-modifier': linkModifierHeld, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @dragover.prevent @drop.prevent="onImageDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"

@@ -442,7 +442,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .mind-node .link-handle { width: 7px; height: 7px; cursor: crosshair; opacity: 0; pointer-events: none; }
 .link-handle::before { content: ''; position: absolute; inset: -3px; border-radius: 50%; }
 .mind-node.style-line:not(.root) .link-handle-left, .mind-node.style-line:not(.root) .link-handle-right { bottom: auto; transform: translateY(-50%); }
-.mind-node:hover .link-handle, .canvas-wrap.linking .link-handle { opacity: 1; pointer-events: all; }
+.canvas-wrap.link-modifier .mind-node:hover .link-handle, .canvas-wrap.linking .link-handle { opacity: 1; pointer-events: all; }
 .mind-node .link-handle:hover { background: var(--branch); }
 
 .vue-flow__edge-path { stroke: var(--edge); stroke-width: 2; stroke-linecap: round; }
