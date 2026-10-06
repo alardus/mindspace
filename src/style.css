@@ -411,21 +411,19 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .node-editor .node-note::placeholder { color: var(--muted-2); }
 .root .node-editor textarea, .root .node-editor input { text-align: center; }
 
-.collapse-button { position: absolute; bottom: -10px; z-index: 3; display: none; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow-seg); cursor: pointer; font-size: 12px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
+.node-actions { position: absolute; bottom: -9px; z-index: 3; display: flex; align-items: center; gap: 4px; pointer-events: none; }
+.node-action { display: none; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow-seg); cursor: pointer; font-size: 12px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
 .collapse-button svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
-.collapse-button:hover { color: var(--ink); border-color: var(--border-strong); }
-.mind-node:hover .collapse-button, .mind-node.selected .collapse-button, .mind-node.collapsed .collapse-button { display: grid; }
-/* Collapse button sits on the descendants' side, even if the branch was moved to the other side of the parent. */
-/* The button is 16px past the line end so it doesn't cover the link point at the very end. */
-.kids-right .collapse-button { right: -16px; transform: translateX(50%); }
-.kids-left .collapse-button { left: -16px; transform: translateX(-50%); }
-.root .collapse-button { bottom: auto; top: 50%; }
-.mind-node.root.kids-right .collapse-button { transform: translate(50%, -50%); }
-.mind-node.root.kids-left .collapse-button { transform: translate(-50%, -50%); }
-/* Invisible bridge across the gap to the node edge: the cursor reaches the button without losing node hover. */
-.collapse-button::before { content: ''; position: absolute; top: -4px; bottom: -4px; width: 8px; }
-.kids-right .collapse-button::before { right: 100%; }
-.kids-left .collapse-button::before { left: 100%; }
+.node-action:hover { color: var(--ink); border-color: var(--border-strong); }
+.mind-node:hover .node-action, .mind-node.selected .node-action, .mind-node.collapsed .collapse-button { display: grid; pointer-events: auto; }
+/* Mouse actions sit on the descendants' side, with collapse nearest the block and add just beyond it. */
+.kids-right .node-actions { left: calc(100% + 8px); }
+.kids-left .node-actions { right: calc(100% + 8px); flex-direction: row-reverse; }
+.root .node-actions { top: 50%; bottom: auto; transform: translateY(-50%); }
+/* Invisible bridge across the gap to the node edge: the cursor reaches the actions without losing node hover. */
+.node-actions::before { content: ''; position: absolute; top: -4px; bottom: -4px; width: 8px; pointer-events: auto; }
+.kids-right .node-actions::before { right: 100%; }
+.kids-left .node-actions::before { left: 100%; }
 
 /* No transform animation: Vue Flow measures the point right after a node style change, and measuring mid-animation shifted the connector. */
 .node-handle { width: 8px; height: 8px; background: var(--surface); border: 2px solid var(--branch); opacity: 0; transition: opacity .15s; }
@@ -436,21 +434,18 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 /* bottom is measured from the inner border edge: −5px puts the handle center in the middle of the 2px line. */
 .mind-node.style-line:not(.root) .vue-flow__handle-left, .mind-node.style-line:not(.root) .vue-flow__handle-right { top: auto; bottom: -5px; transform: none; }
 .mind-node.image-only.style-line:not(.root) .vue-flow__handle-left, .mind-node.image-only.style-line:not(.root) .vue-flow__handle-right { top: 50%; bottom: auto; transform: translateY(-50%); }
-.mind-node.image-only:not(.root) .collapse-button { top: 50%; bottom: auto; }
 /* Tree: the connector leaves downward from the parent's left edge. */
 .mind-node .tree-handle { top: auto; right: auto; bottom: -1px; left: 10px; transform: none; opacity: 0; pointer-events: none; }
 .mind-node.root .tree-handle { left: 20px; }
-.target-handle { pointer-events: all; }
-/* The link point appears only when hovering the node edge itself; the hover zone is wider than the point
-   (the pseudo-element is outside the handle box, so connectors don't shift). */
-.source-handle { cursor: crosshair; }
-.source-handle::before { content: ''; position: absolute; inset: -7px; border-radius: 50%; }
-.mind-node .source-handle:hover { opacity: 1; background: var(--branch); }
-/* While dragging a link, every node's points are visible — clear where to drop. */
-.canvas-wrap.linking .source-handle, .canvas-wrap.linking .target-handle { opacity: 1; }
-.canvas-wrap.linking .mind-node .node-handle:hover { background: var(--branch); }
+.target-handle, .source-handle { pointer-events: none; }
+.mind-node .link-handle { width: 7px; height: 7px; cursor: crosshair; opacity: 0; pointer-events: none; }
+.link-handle::before { content: ''; position: absolute; inset: -3px; border-radius: 50%; }
+.mind-node.style-line:not(.root) .link-handle-left, .mind-node.style-line:not(.root) .link-handle-right { bottom: auto; transform: translateY(-50%); }
+.mind-node:hover .link-handle, .canvas-wrap.linking .link-handle { opacity: 1; pointer-events: all; }
+.mind-node .link-handle:hover { background: var(--branch); }
 
 .vue-flow__edge-path { stroke: var(--edge); stroke-width: 2; stroke-linecap: round; }
+.mind-flow:has(.mind-node:hover) .vue-flow__edge-interaction, .canvas-wrap.linking .vue-flow__edge-interaction { pointer-events: none; }
 .vue-flow__edge.relation-edge .vue-flow__edge-path { stroke: var(--relation); stroke-dasharray: 5 5; }
 .vue-flow__edge.selected .vue-flow__edge-path { filter: brightness(.8); stroke-width: 3; }
 
@@ -489,10 +484,8 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 @media (max-width: 1100px) {
 }
 
-/* Card and text have no underline — the collapse button is centered on the side edge. */
-.mind-node.style-card:not(.root) .collapse-button, .mind-node.style-text:not(.root) .collapse-button { top: 50%; bottom: auto; }
-.mind-node.kids-right.style-card .collapse-button, .mind-node.kids-right.style-text .collapse-button { transform: translate(50%, -50%); }
-.mind-node.kids-left.style-card .collapse-button, .mind-node.kids-left.style-text .collapse-button { transform: translate(-50%, -50%); }
+/* Card, text and images have no underline endpoint — their mouse actions are centered on the side edge. */
+.mind-node.style-card:not(.root) .node-actions, .mind-node.style-text:not(.root) .node-actions, .mind-node.image-only:not(.root) .node-actions { top: 50%; bottom: auto; transform: translateY(-50%); }
 
 /* Map search on the canvas: matches marked, everything else dimmed except the paths down to matches. */
 .mind-node mark { padding: 0 1px; color: var(--ink); background: var(--mark); border-radius: 3px; }

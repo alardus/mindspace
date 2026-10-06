@@ -4,11 +4,14 @@ import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, ge
 import {
   DEFAULT_SIZE,
   LIBRARY_STORAGE_KEY,
+  LINK_ANCHORS,
   MAX_LABEL_LENGTH,
   PALETTES,
   STORAGE_KEY,
+  allowsAttachTarget,
   blockPreview,
   branchColor,
+  branchCurveBend,
   descendantsOf,
   highlightParts,
   insertTreeEdgeAfter,
@@ -327,7 +330,9 @@ function branchPath({ sourceX, sourceY, targetX, targetY, sourcePosition }) {
     return `M${sourceX},${sourceY} L${sourceX},${targetY - radius} Q${sourceX},${targetY} ${sourceX + radius},${targetY} L${targetX},${targetY}`
   }
   if (settings.value.lines === 'straight') return `M${sourceX},${sourceY} L${targetX},${targetY}`
-  const bend = sourcePosition === Position.Left ? -60 : 60
+  const direction = sourcePosition === Position.Left ? -1 : 1
+  const bend = branchCurveBend(sourceX, targetX, direction)
+  if (!bend) return `M${sourceX},${sourceY} L${targetX},${targetY}`
   return `M${sourceX},${sourceY} C${sourceX + bend},${sourceY} ${targetX - bend},${targetY} ${targetX},${targetY}`
 }
 
@@ -616,14 +621,14 @@ function focusEditor(id, initialText = null) {
   editingId.value = id
   editDraft.value = { label: initialText ?? node?.data.label ?? '', note: node?.data.note ?? '' }
   editStart = snapshot()
-  nextTick(() => {
+  nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => {
     const editor = document.querySelector(`[data-editor="${CSS.escape(id)}"]`)
+    editor?.focus()
     if (initialText === null) editor?.select()
     else {
-      editor?.focus()
       editor?.setSelectionRange(initialText.length, initialText.length)
     }
-  })
+  })))
 }
 
 function focusNoteEditor(id) {
@@ -1278,7 +1283,10 @@ function showAttachPreview(node, dragged, event) {
   const point = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
   const best = movedFromOrigin(node) ? merge ?? findAttachTarget(node, roots, point) : null
   const mode = merge && best === merge ? 'merge' : 'attach'
-  const changes = best && (mode === 'merge' || roots.some((item) => best.target.id !== parentOf.value.get(item.id)))
+  const parentIds = roots.map((item) => parentOf.value.get(item.id))
+  const changes = best && (mode === 'merge'
+    || (allowsAttachTarget(parentIds, best.target.id, best.overlap)
+      && roots.some((item) => best.target.id !== parentOf.value.get(item.id))))
   // Preview only: the real link doesn't change until release.
   dragPreview.value = changes
     ? {
@@ -2144,14 +2152,15 @@ watch(() => primaryNode.value?.id, () => {
   if (inspectorBody.value) inspectorBody.value.scrollTop = 0
 })
 
-watch([nodes, edges, title, autoLayout, settings], () => {
+// Vue Flow adds large internal handle geometry to every node; watch only fields that are actually saved.
+watch(snapshot, () => {
   dirty = true
   saveState.value = 'saving'
   clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
     persistDocuments()
   }, 250)
-}, { deep: true })
+})
 
 onMounted(() => {
   applyVisibility()
@@ -2263,8 +2272,19 @@ onBeforeUnmount(() => {
               :aria-label="data.label || data.image?.name"
               tabindex="-1"
             >
-              <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" />
-              <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" title="Drag to link to another node" />
+              <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" :connectable="false" />
+              <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" :connectable="false" />
+              <Handle
+                v-for="anchor in LINK_ANCHORS"
+                :id="anchor.id"
+                :key="anchor.id"
+                type="source"
+                :position="anchor.side"
+                class="node-handle link-handle"
+                :class="`link-handle-${anchor.side}`"
+                :style="anchor.side === 'top' ? { left: `${anchor.offset}%` } : { top: `${anchor.offset}%` }"
+                title="Drag to link to another block"
+              />
               <img
                 v-if="data.image && imageUrls.get(data.image.assetId)"
                 class="node-image"
@@ -2310,18 +2330,32 @@ onBeforeUnmount(() => {
                 <span v-if="data.label" class="node-title"><template v-for="(part, index) in searchParts(id, blockPreview(data.label))" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 <span v-if="data.note" class="node-note"><template v-for="(part, index) in searchParts(id, data.note)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
               </template>
-              <button
-                v-if="hasChildren(id)"
-                class="collapse-button nodrag nopan"
-                :title="data.collapsed ? 'Expand branch' : 'Collapse branch'"
-                :aria-label="data.collapsed ? `Expand branch, ${hiddenCount(id)} hidden` : 'Collapse branch'"
-                @click.stop="toggleCollapse(id)"
+              <div
+                v-if="!data.root || hasChildren(id)"
+                class="node-actions nodrag nopan"
+                @pointerdown.stop.prevent
+                @click.stop
               >
-                <template v-if="data.collapsed">{{ hiddenCount(id) }}</template>
-                <svg v-else viewBox="0 0 10 10"><path d="M2 5h6"/></svg>
-              </button>
-              <Handle id="target-right" type="target" :position="Position.Right" class="node-handle target-handle" />
-              <Handle id="source-right" type="source" :position="Position.Right" class="node-handle source-handle" title="Drag to link to another node" />
+                <button
+                  v-if="hasChildren(id)"
+                  class="node-action collapse-button"
+                  :title="data.collapsed ? 'Expand branch' : 'Collapse branch'"
+                  :aria-label="data.collapsed ? `Expand branch, ${hiddenCount(id)} hidden` : 'Collapse branch'"
+                  @click="toggleCollapse(id)"
+                >
+                  <template v-if="data.collapsed">{{ hiddenCount(id) }}</template>
+                  <svg v-else viewBox="0 0 10 10"><path d="M2 5h6"/></svg>
+                </button>
+                <button
+                  v-if="!data.root"
+                  class="node-action add-child-button"
+                  title="Add child block"
+                  aria-label="Add child block"
+                  @click="addChild(id)"
+                >+</button>
+              </div>
+              <Handle id="target-right" type="target" :position="Position.Right" class="node-handle target-handle" :connectable="false" />
+              <Handle id="source-right" type="source" :position="Position.Right" class="node-handle source-handle" :connectable="false" />
               <Handle id="source-tree" type="source" :position="Position.Bottom" class="node-handle tree-handle" :connectable="false" />
             </div>
           </template>

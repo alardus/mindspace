@@ -7,6 +7,8 @@ const parseMarkdown = mapModel.parseMarkdown ?? (() => ({ title: '', nodes: [], 
 const toMarkdown = mapModel.toMarkdown ?? (() => '')
 const blockPreview = mapModel.blockPreview ?? ((text) => text)
 const pointRectDistance = mapModel.pointRectDistance ?? (() => Infinity)
+const branchCurveBend = mapModel.branchCurveBend ?? (() => 60)
+const allowsAttachTarget = mapModel.allowsAttachTarget ?? (() => true)
 
 const image = {
   assetId: 'asset-1',
@@ -32,6 +34,20 @@ test('attachment proximity follows the cursor beside any part of a block', () =>
   assert.equal(pointRectDistance({ x: 250, y: 115 }, target), 50)
   assert.equal(pointRectDistance({ x: 250, y: 130 }, target), 50)
   assert.equal(pointRectDistance({ x: 320, y: 115 }, target), 0)
+})
+
+test('branch curves cannot bend back across a short or reversed gap', () => {
+  assert.equal(branchCurveBend(0, 200, 1), 60)
+  assert.equal(branchCurveBend(0, 80, 1), 40)
+  assert.equal(branchCurveBend(100, 20, -1), -40)
+  assert.equal(branchCurveBend(100, 120, -1), 0)
+})
+
+test('an attached branch changes parent only when dropped on the new parent', () => {
+  assert.equal(allowsAttachTarget([undefined], 'new-parent', false), true)
+  assert.equal(allowsAttachTarget(['current-parent'], 'current-parent', false), true)
+  assert.equal(allowsAttachTarget(['current-parent'], 'new-parent', false), false)
+  assert.equal(allowsAttachTarget(['current-parent'], 'new-parent', true), true)
 })
 
 test('image-only nodes survive a version 3 round-trip', () => {

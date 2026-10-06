@@ -102,6 +102,12 @@ export function referencedAssetIds(map) {
   return new Set(map?.nodes?.flatMap((node) => node.data?.image?.assetId ? [node.data.image.assetId] : []) ?? [])
 }
 
+export const LINK_ANCHORS = ['left', 'right', 'top'].flatMap((side) => [25, 50, 75].map((offset, index) => ({
+  id: `link-${side}-${index + 1}`,
+  side,
+  offset,
+})))
+
 export function makeEdge(source, target, kind = 'tree', id = uid()) {
   const edgeKind = kind === 'link' ? 'link' : 'tree'
   return { id, source, target, type: edgeKind === 'tree' ? 'branch' : 'smoothstep', class: edgeKind === 'link' ? 'relation-edge' : 'tree-edge', data: { kind: edgeKind } }
@@ -249,6 +255,14 @@ export const pointRectDistance = (point, rect) => Math.hypot(
   Math.max(rect.x - point.x, point.x - rect.x - rect.width, 0),
   Math.max(rect.y - point.y, point.y - rect.y - rect.height, 0),
 )
+
+export function branchCurveBend(sourceX, targetX, direction) {
+  const bend = Math.min(60, Math.max(0, (targetX - sourceX) * direction / 2))
+  return bend ? direction * bend : 0
+}
+
+export const allowsAttachTarget = (parentIds, targetId, overlap) => overlap
+  || parentIds.every((parentId) => !parentId || parentId === targetId)
 
 // Shift-drag smart guides for center alignment and equal gaps.
 export function snapNode(rect, candidates, threshold, maxDistance) {

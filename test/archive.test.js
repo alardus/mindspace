@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { strToU8, zipSync } from 'fflate'
-import { normalizeMap } from '../src/model.js'
+import { LINK_ANCHORS, normalizeMap } from '../src/model.js'
 
 const archive = await import('../src/archive.js').catch(() => ({}))
 const createMindmapFile = archive.createMindmapFile ?? (async () => new Blob())
@@ -31,7 +31,14 @@ const imageMap = () => normalizeMap({
     { id: 'first', data: { label: '', image: firstImage } },
     { id: 'second', data: { label: 'Photo', image: secondImage } },
   ],
-  edges: [],
+  edges: [{
+    id: 'relation',
+    source: 'first',
+    target: 'second',
+    sourceHandle: 'link-left-2',
+    targetHandle: 'link-top-3',
+    data: { kind: 'link' },
+  }],
 })
 
 test('maps without images remain JSON files', async () => {
@@ -40,6 +47,39 @@ test('maps without images remain JSON files', async () => {
 
   assert.equal(blob.type, 'application/json')
   assert.deepEqual(JSON.parse(await blob.text()), map)
+})
+
+test('nine relation anchors survive JSON export and import', async () => {
+  assert.deepEqual(LINK_ANCHORS.map(({ id, side, offset }) => [id, side, offset]), [
+    ['link-left-1', 'left', 25],
+    ['link-left-2', 'left', 50],
+    ['link-left-3', 'left', 75],
+    ['link-right-1', 'right', 25],
+    ['link-right-2', 'right', 50],
+    ['link-right-3', 'right', 75],
+    ['link-top-1', 'top', 25],
+    ['link-top-2', 'top', 50],
+    ['link-top-3', 'top', 75],
+  ])
+  const map = normalizeMap({
+    version: 2,
+    nodes: [{ id: 'first', data: { label: 'First' } }, { id: 'second', data: { label: 'Second' } }],
+    edges: [{
+      id: 'relation',
+      source: 'first',
+      target: 'second',
+      sourceHandle: LINK_ANCHORS[0].id,
+      targetHandle: LINK_ANCHORS.at(-1).id,
+      data: { kind: 'link' },
+    }],
+  })
+
+  const exported = await createMindmapFile(map, async () => null)
+  const imported = await readMindmapFile(new File([exported], 'anchors.mindmap'))
+  const reopened = normalizeMap(JSON.parse(imported.text))
+
+  assert.equal(reopened.edges[0].sourceHandle, 'link-left-1')
+  assert.equal(reopened.edges[0].targetHandle, 'link-top-3')
 })
 
 test('image maps round-trip exact assets through a ZIP archive', async () => {
@@ -57,6 +97,7 @@ test('image maps round-trip exact assets through a ZIP archive', async () => {
   const importedIds = imported.map.nodes.map((node) => node.data.image.assetId)
   assert.equal(new Set(importedIds).size, 2)
   assert.ok(importedIds.every((id) => id !== 'asset-1' && id !== 'asset-2'))
+  assert.deepEqual([imported.map.edges[0].sourceHandle, imported.map.edges[0].targetHandle], ['link-left-2', 'link-top-3'])
   assert.deepEqual(imported.assets.map((asset) => asset.image.assetId), importedIds)
   assert.deepEqual(
     await Promise.all(imported.assets.map(async (asset) => [...new Uint8Array(await asset.blob.arrayBuffer())])),
