@@ -2298,6 +2298,7 @@ onBeforeUnmount(() => {
                 v-if="editingId === id"
                 class="node-editor nodrag nopan"
                 @pointerdown.stop
+                @dblclick.stop
                 @focusout="onEditorFocusOut"
               >
                 <textarea
