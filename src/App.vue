@@ -29,6 +29,7 @@ import {
   paletteColors,
   parseMarkdown,
   parseOpml,
+  pointRectDistance,
   plural,
   pluralNodes,
   recolorForPalette,
@@ -1205,8 +1206,8 @@ function onNodesInitialized() {
 }
 
 const ATTACH_RADIUS = 160
-// The root pulls harder: distance to it counts as half (attach radius is 320),
-// and if the block's line start is brought closer than ROOT_SNAP to the root's edge, the root wins even over the node under the block.
+// The root pulls harder: cursor distance to it counts as half (attach radius is 320),
+// and inside ROOT_SNAP it wins even over the node under the cursor.
 // Bringing a block to the root means making it a first-level branch, not a child of a neighbouring branch.
 const ROOT_PULL = 0.5
 const ROOT_SNAP = 80
@@ -1229,26 +1230,22 @@ function attachGeometry(node, candidate) {
   const x1 = node.position.x + (tree || side === 'right' ? 0 : own.w)
   const y1 = node.position.y + (ownOnLine ? own.h - 1 : own.h / 2)
   const sourcePosition = tree ? Position.Bottom : side === 'right' ? Position.Right : Position.Left
-  return { side, distance: Math.hypot(x1 - x0, y1 - y0), path: branchPath({ sourceX: x0, sourceY: y0, targetX: x1, targetY: y1, sourcePosition }) }
+  return { side, path: branchPath({ sourceX: x0, sourceY: y0, targetX: x1, targetY: y1, sourcePosition }) }
 }
 
-// The nearest node the dragged one will attach to: the one it was dropped on, or the closest within the radius.
-function findAttachTarget(node, dragged = [node]) {
+// The nearest node to the cursor: the one under it, or the closest within the radius.
+function findAttachTarget(node, dragged, point) {
   const excluded = new Set(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
-  const center = {
-    x: node.position.x + (node.dimensions?.width || 180) / 2,
-    y: node.position.y + (node.dimensions?.height || 30) / 2,
-  }
   let best = null
   for (const candidate of nodes.value) {
     if (excluded.has(candidate.id) || candidate.hidden) continue
     const width = candidate.dimensions?.width || 180
     const height = candidate.dimensions?.height || 30
-    const overlap = center.x >= candidate.position.x && center.x <= candidate.position.x + width
-      && center.y >= candidate.position.y && center.y <= candidate.position.y + height
+    const proximity = pointRectDistance(point, { ...candidate.position, width, height })
+    const overlap = proximity === 0
     const geometry = attachGeometry(node, candidate)
-    const snapsToRoot = candidate.data.root && geometry.distance <= ROOT_SNAP
-    const distance = snapsToRoot ? -1 : overlap ? 0 : geometry.distance * (candidate.data.root ? ROOT_PULL : 1)
+    const snapsToRoot = candidate.data.root && proximity <= ROOT_SNAP
+    const distance = snapsToRoot ? -1 : overlap ? 0 : proximity * (candidate.data.root ? ROOT_PULL : 1)
     if (distance > ATTACH_RADIUS || (best && best.distance <= distance)) continue
     best = { target: candidate, overlap, ...geometry, distance }
   }
@@ -1275,10 +1272,11 @@ function findMergeTarget(node, dragged) {
   return null
 }
 
-function showAttachPreview(node, dragged) {
+function showAttachPreview(node, dragged, event) {
   const roots = dragRoots.length ? dragRoots : dragged
   const merge = roots.length === 1 ? findMergeTarget(roots[0], roots) : null
-  const best = movedFromOrigin(node) ? merge ?? findAttachTarget(node, roots) : null
+  const point = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+  const best = movedFromOrigin(node) ? merge ?? findAttachTarget(node, roots, point) : null
   const mode = merge && best === merge ? 'merge' : 'attach'
   const changes = best && (mode === 'merge' || roots.some((item) => best.target.id !== parentOf.value.get(item.id)))
   // Preview only: the real link doesn't change until release.
@@ -1368,13 +1366,13 @@ function onNodeDrag({ event, node, nodes: dragged = [node] }) {
   }
   if (rigidDrag) {
     rigidDrag.rawPosition = rawPosition
-    showAttachPreview(node, dragged)
+    showAttachPreview(node, dragged, event)
     moveRigidBranch(node)
     return
   }
   moveBranch(node)
   updateSides(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
-  showAttachPreview(node, dragged)
+  showAttachPreview(node, dragged, event)
 }
 
 function onNodeDragStop(payload) {

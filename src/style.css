@@ -406,7 +406,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .node-editor { display: flex; flex-direction: column; gap: 1px; width: 240px; }
 .root .node-editor { align-items: center; }
 .node-editor textarea, .node-editor input { width: 100%; padding: 0; color: inherit; background: transparent; border: 0; outline: none; resize: none; text-align: inherit; caret-color: var(--branch); }
-.node-editor textarea { display: block; field-sizing: content; max-height: 40px; }
+.node-editor textarea { display: block; field-sizing: content; }
 .node-editor .node-note { white-space: normal; }
 .node-editor .node-note::placeholder { color: var(--muted-2); }
 .root .node-editor textarea, .root .node-editor input { text-align: center; }

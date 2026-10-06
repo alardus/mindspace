@@ -6,6 +6,7 @@ import { COLORS, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETT
 const parseMarkdown = mapModel.parseMarkdown ?? (() => ({ title: '', nodes: [], edges: [] }))
 const toMarkdown = mapModel.toMarkdown ?? (() => '')
 const blockPreview = mapModel.blockPreview ?? ((text) => text)
+const pointRectDistance = mapModel.pointRectDistance ?? (() => Infinity)
 
 const image = {
   assetId: 'asset-1',
@@ -22,6 +23,15 @@ test('block preview hides text after 1000 characters without discarding it', () 
   assert.equal(blockPreview('🙂'.repeat(1000)), '🙂'.repeat(1000))
   assert.equal(blockPreview(long), `${'a'.repeat(1000)}...`)
   assert.equal(normalizeMap({ version: 2, nodes: [{ data: { label: long } }], edges: [] }).nodes[0].data.label, long)
+})
+
+test('attachment proximity follows the cursor beside any part of a block', () => {
+  const target = { x: 300, y: 100, width: 80, height: 30 }
+
+  assert.equal(pointRectDistance({ x: 250, y: 100 }, target), 50)
+  assert.equal(pointRectDistance({ x: 250, y: 115 }, target), 50)
+  assert.equal(pointRectDistance({ x: 250, y: 130 }, target), 50)
+  assert.equal(pointRectDistance({ x: 320, y: 115 }, target), 0)
 })
 
 test('image-only nodes survive a version 3 round-trip', () => {

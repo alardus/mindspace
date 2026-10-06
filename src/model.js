@@ -245,6 +245,10 @@ export function nodeInDirection(nodes, currentId, direction) {
 }
 
 const intervalGap = (a0, a1, b0, b1) => Math.max(a0 - b1, b0 - a1, 0)
+export const pointRectDistance = (point, rect) => Math.hypot(
+  Math.max(rect.x - point.x, point.x - rect.x - rect.width, 0),
+  Math.max(rect.y - point.y, point.y - rect.y - rect.height, 0),
+)
 
 // Shift-drag smart guides for center alignment and equal gaps.
 export function snapNode(rect, candidates, threshold, maxDistance) {
