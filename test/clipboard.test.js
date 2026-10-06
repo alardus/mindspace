@@ -226,6 +226,24 @@ test('reads tab-indented service outlines', () => {
   ])
 })
 
+test('reads copied OmniFocus actions as separate roots', () => {
+  const fragment = parseClipboardData(clipboard({
+    'text/rtf': '{\\rtf1 ...}',
+    'text/uri-list': 'omnifocus:///task/kvbd0O1wFp1',
+    'text/plain': 'Разобраться в Лешином проекте\nПосмотреть на проект товарища который писал текст про альфа арену\nНабросать какой-то план по Альфа арене\nПочитать по Альфа арене\n',
+  }), ids())
+
+  assert.equal(fragment.source, 'omnifocus')
+  assert.deepEqual(fragment.nodes.map((node) => node.data.label), [
+    'Разобраться в Лешином проекте',
+    'Посмотреть на проект товарища который писал текст про альфа арену',
+    'Набросать какой-то план по Альфа арене',
+    'Почитать по Альфа арене',
+  ])
+  assert.deepEqual(fragment.roots, ['new-1', 'new-2', 'new-3', 'new-4'])
+  assert.deepEqual(fragment.edges, [])
+})
+
 test('keeps multiline prose in one root', () => {
   const fragment = parseClipboardData(clipboard({
     'text/plain': 'First paragraph\nSecond paragraph',

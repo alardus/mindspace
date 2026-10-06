@@ -131,6 +131,40 @@ test('a self-contained root branch can move as one visual group', () => {
   assert.equal(mapModel.rigidRootBranch?.(root, [root], [...edges, makeEdge('leaf', other.id, 'link')]), null)
 })
 
+test('reparents every top-level selected branch without flattening selected descendants', () => {
+  const target = makeNode('target', {}, { id: 'target', root: true })
+  const first = makeNode('first', {}, { id: 'first', root: true })
+  const firstChild = makeNode('first child', {}, { id: 'first-child' })
+  const oldParent = makeNode('old parent', {}, { id: 'old-parent', root: true })
+  const second = makeNode('second', {}, { id: 'second' })
+  const secondChild = makeNode('second child', {}, { id: 'second-child' })
+  const nodes = [target, first, firstChild, oldParent, second, secondChild]
+  const edges = [
+    makeEdge('first', 'first-child', 'tree', 'first-child-edge'),
+    makeEdge('old-parent', 'second', 'tree', 'old-second-edge'),
+    makeEdge('second', 'second-child', 'tree', 'second-child-edge'),
+  ]
+
+  const result = mapModel.reparentBranches?.(nodes, edges, ['first', 'first-child', 'second'], 'target')
+    ?? { error: 'missing', nodes: [], edges: [], rootIds: [] }
+
+  assert.equal(result.error, null)
+  assert.deepEqual(result.rootIds, ['first', 'second'])
+  assert.equal(result.nodes.find((node) => node.id === 'first').data.root, false)
+  assert.equal(first.data.root, true)
+  assert.deepEqual(result.edges.map(({ source, target: child }) => [source, child]), [
+    ['first', 'first-child'],
+    ['second', 'second-child'],
+    ['target', 'first'],
+    ['target', 'second'],
+  ])
+  assert.deepEqual(edges.map(({ source, target: child }) => [source, child]), [
+    ['first', 'first-child'],
+    ['old-parent', 'second'],
+    ['second', 'second-child'],
+  ])
+})
+
 test('arrow navigation follows visible node positions', () => {
   const current = makeNode('current', { x: 100, y: 100 }, { id: 'current' })
   const right = makeNode('right', { x: 300, y: 110 }, { id: 'right' })

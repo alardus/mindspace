@@ -142,6 +142,40 @@ export function descendantsOf(id, edges) {
   return found
 }
 
+export function selectedBranchRoots(ids, edges) {
+  const selected = new Set(ids)
+  const parent = new Map(edges
+    .filter((edge) => edge.data?.kind === 'tree')
+    .map((edge) => [edge.target, edge.source]))
+  return [...selected].filter((id) => {
+    const seen = new Set([id])
+    for (let ancestor = parent.get(id); ancestor && !seen.has(ancestor); ancestor = parent.get(ancestor)) {
+      if (selected.has(ancestor)) return false
+      seen.add(ancestor)
+    }
+    return true
+  })
+}
+
+export function reparentBranches(nodes, edges, selectedIds, targetId) {
+  const existing = new Set(nodes.map((node) => node.id))
+  const rootIds = selectedBranchRoots(selectedIds, edges).filter((id) => existing.has(id))
+  const moving = new Set(rootIds.flatMap((id) => [id, ...descendantsOf(id, edges)]))
+  if (!rootIds.length || !existing.has(targetId) || moving.has(targetId)) {
+    return { error: 'invalid-target', nodes, edges, rootIds: [] }
+  }
+  const roots = new Set(rootIds)
+  return {
+    error: null,
+    rootIds,
+    nodes: nodes.map((node) => roots.has(node.id) ? { ...node, data: { ...node.data, root: false } } : node),
+    edges: [
+      ...edges.filter((edge) => edge.data?.kind !== 'tree' || !roots.has(edge.target)),
+      ...rootIds.map((id) => makeEdge(targetId, id)),
+    ],
+  }
+}
+
 export function rigidRootBranch(node, dragged, edges) {
   if (!node?.data?.root || dragged.length !== 1) return null
   const nodeIds = [node.id, ...descendantsOf(node.id, edges)]

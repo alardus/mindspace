@@ -1,4 +1,4 @@
-import { DEFAULT_SIZE, descendantsOf, makeEdge, makeNode } from './model.js'
+import { DEFAULT_SIZE, descendantsOf, makeEdge, makeNode, selectedBranchRoots } from './model.js'
 
 export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
@@ -74,17 +74,7 @@ function outlineText(nodes, edges, roots) {
 export function serializeClipboardBranches(nodes, edges, selectedIds) {
   const existing = new Set(nodes.map((node) => node.id))
   const selected = [...new Set(selectedIds)].filter((id) => existing.has(id))
-  const parent = new Map(edges
-    .filter((edge) => edge.data?.kind === 'tree')
-    .map((edge) => [edge.target, edge.source]))
-  const roots = selected.filter((id) => {
-    const seen = new Set([id])
-    for (let ancestor = parent.get(id); ancestor && !seen.has(ancestor); ancestor = parent.get(ancestor)) {
-      if (selected.includes(ancestor)) return false
-      seen.add(ancestor)
-    }
-    return true
-  })
+  const roots = selectedBranchRoots(selected, edges)
   const included = new Set(roots.flatMap((id) => [id, ...descendantsOf(id, edges)]))
   const copiedNodes = nodes.filter((node) => included.has(node.id)).map(cleanNode)
   const copiedEdges = edges
@@ -319,6 +309,11 @@ export function parseClipboardData(data, createId = uid) {
   const html = types.has('text/html') ? data.getData('text/html') : ''
   const htmlItems = html && parseHtmlItems(html)
   if (htmlItems?.length) return fragmentFromItems(htmlItems, 'html', createId)
+
+  const uriList = types.has('text/uri-list') ? data.getData('text/uri-list') : ''
+  if (/(?:^|\r?\n)omnifocus:\/\/\/task\//i.test(uriList)) {
+    return fragmentFromItems(text.split(/\r?\n/).map((label) => ({ label, depth: 0 })), 'omnifocus', createId)
+  }
 
   const trimmed = text.trim()
   if (!trimmed) return null

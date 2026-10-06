@@ -31,9 +31,11 @@ import {
   pluralNodes,
   recolorForPalette,
   referencedAssetIds,
+  reparentBranches,
   relativeTime,
   rigidRootBranch,
   searchOrder,
+  selectedBranchRoots,
   shiftNodesBelow,
   snapNode,
   starterMap,
@@ -221,6 +223,7 @@ let clockTimer
 let dirty = false
 let dragOrigin = null
 let dragBranch = null
+let dragRoots = []
 let rigidDrag = null
 let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
@@ -1135,10 +1138,14 @@ function onNodeDragStart({ node, nodes: dragged = [node] }) {
   if (alignmentGuides.value.length) alignmentGuides.value = []
   dragStart = snapshot()
   dragOrigin = { ...node.position }
-  const descendants = descendantsOf(node.id, edges.value)
-  // The branch moves with its parent; Vue Flow moves selected descendants itself.
+  const draggedIds = new Set(dragged.map((item) => item.id))
+  dragRoots = selectedBranchRoots(draggedIds, edges.value)
+    .map((id) => nodesById.value.get(id))
+    .filter(Boolean)
+  const descendants = new Set(dragRoots.flatMap((item) => [...descendantsOf(item.id, edges.value)]))
+  // Every selected branch moves with its parent; Vue Flow moves selected descendants itself.
   dragBranch = new Map(nodes.value
-    .filter((item) => descendants.has(item.id) && !item.selected)
+    .filter((item) => descendants.has(item.id) && !draggedIds.has(item.id))
     .map((item) => [item.id, { item, origin: { ...item.position } }]))
   const rigid = rigidRootBranch(node, dragged, edges.value)
   if (rigid) {
@@ -1224,7 +1231,6 @@ function attachGeometry(node, candidate) {
 }
 
 // The nearest node the dragged one will attach to: the one it was dropped on, or the closest within the radius.
-// A text root attaches only on overlap — so moving a whole tree doesn't hang it off a neighbour.
 function findAttachTarget(node, dragged = [node]) {
   const excluded = new Set(dragged.flatMap((item) => [item.id, ...descendantsOf(item.id, edges.value)]))
   const center = {
@@ -1238,7 +1244,6 @@ function findAttachTarget(node, dragged = [node]) {
     const height = candidate.dimensions?.height || 30
     const overlap = center.x >= candidate.position.x && center.x <= candidate.position.x + width
       && center.y >= candidate.position.y && center.y <= candidate.position.y + height
-    if (node.data.root && !imageOnly(node) && !overlap) continue
     const geometry = attachGeometry(node, candidate)
     const snapsToRoot = candidate.data.root && geometry.distance <= ROOT_SNAP
     const distance = snapsToRoot ? -1 : overlap ? 0 : geometry.distance * (candidate.data.root ? ROOT_PULL : 1)
@@ -1269,17 +1274,29 @@ function findMergeTarget(node, dragged) {
 }
 
 function showAttachPreview(node, dragged) {
-  const parentId = parentOf.value.get(node.id)
-  const parentEdge = edges.value.find((edge) => edge.data?.kind === 'tree' && edge.target === node.id)
-  const best = movedFromOrigin(node) ? findMergeTarget(node, dragged) ?? findAttachTarget(node, dragged) : null
-  const mode = imageOnly(node) && best?.overlap && best.target.data.label?.trim() ? 'merge' : 'attach'
-  const changes = best && (mode === 'merge' || best.target.id !== parentId)
+  const roots = dragRoots.length ? dragRoots : dragged
+  const merge = roots.length === 1 ? findMergeTarget(roots[0], roots) : null
+  const best = movedFromOrigin(node) ? merge ?? findAttachTarget(node, roots) : null
+  const mode = merge && best === merge ? 'merge' : 'attach'
+  const changes = best && (mode === 'merge' || roots.some((item) => best.target.id !== parentOf.value.get(item.id)))
   // Preview only: the real link doesn't change until release.
   dragPreview.value = changes
-    ? { mode, targetId: best.target.id, path: best.path, overlap: best.overlap, color: best.target.data.root ? node.data.color : best.target.data.color }
+    ? {
+        mode,
+        targetId: best.target.id,
+        overlap: best.overlap,
+        paths: roots.map((item) => ({
+          id: item.id,
+          path: attachGeometry(item, best.target).path,
+          color: best.target.data.root ? item.data.color : best.target.data.color,
+        })),
+      }
     : null
   dropTargetId.value = changes ? best.target.id : null
-  if (parentEdge) parentEdge.hidden = Boolean(changes)
+  const rootIds = new Set(roots.map((item) => item.id))
+  for (const edge of edges.value) {
+    if (edge.data?.kind === 'tree' && rootIds.has(edge.target)) edge.hidden = Boolean(changes)
+  }
 }
 
 const movedFromOrigin = (node) => dragOrigin
@@ -1360,6 +1377,7 @@ function onNodeDrag({ event, node, nodes: dragged = [node] }) {
 
 function onNodeDragStop(payload) {
   const { node } = payload
+  const roots = dragRoots.length ? [...dragRoots] : [node]
   // Vue Flow restores its raw pointer position before stop; apply the active snap once more.
   const wasRigid = Boolean(rigidDrag)
   if (wasRigid) node.position = rigidDrag.rawPosition
@@ -1384,12 +1402,13 @@ function onNodeDragStop(payload) {
     }
     dragOrigin = null
     dragBranch = null
+    dragRoots = []
     dragStart = null
     return
   }
   const target = preview ? nodesById.value.get(preview.targetId) : null
   if (target && preview.mode === 'merge') {
-    const merged = mergeImageNode(nodes.value, edges.value, node.id, target.id)
+    const merged = mergeImageNode(nodes.value, edges.value, roots[0].id, target.id)
     if (merged.error) {
       if (origin) {
         dragOrigin = origin
@@ -1399,6 +1418,7 @@ function onNodeDragStop(payload) {
         dragOrigin = null
       }
       dragBranch = null
+      dragRoots = []
       dragStart = null
       applyVisibility()
       notify(merged.error === 'target-has-image'
@@ -1412,6 +1432,7 @@ function onNodeDragStop(payload) {
     mergedTarget.data.collapsed = false
     selectOnly(target.id)
     dragBranch = null
+    dragRoots = []
     orient()
     if (autoLayout.value) relayout(false)
     applyVisibility()
@@ -1422,15 +1443,16 @@ function onNodeDragStop(payload) {
   }
   dragBranch = null
   if (target) {
-    edges.value = edges.value.filter((edge) => edge.data?.kind !== 'tree' || edge.target !== node.id)
-    edges.value.push(makeEdge(target.id, node.id))
-    node.data.root = false
-    node.data.side = attachGeometry(node, target).side
-    // Dropped right on a node — nudge it aside; pulled close — leave it where it was released.
-    if (!autoLayout.value && preview.overlap) placeBesideParent(node, target)
-    else updateSides(descendantsOf(node.id, edges.value))
+    const moved = reparentBranches(nodes.value, edges.value, roots.map((item) => item.id), target.id)
+    nodes.value = moved.nodes
+    edges.value = moved.edges
+    const movedRoots = moved.rootIds.map((id) => nodes.value.find((item) => item.id === id)).filter(Boolean)
+    for (const root of movedRoots) root.data.side = attachGeometry(root, target).side
+    // Dropped right on a node — nudge every branch aside; pulled close — leave the group where it was released.
+    if (!autoLayout.value && preview.overlap) movedRoots.forEach((root) => placeBesideParent(root, target))
+    else movedRoots.forEach((root) => updateSides(descendantsOf(root.id, edges.value)))
     if (!target.data.root) {
-      const branch = new Set([node.id, ...descendantsOf(node.id, edges.value)])
+      const branch = new Set(movedRoots.flatMap((root) => [root.id, ...descendantsOf(root.id, edges.value)]))
       for (const item of nodes.value) {
         if (!branch.has(item.id)) continue
         item.data.color = target.data.color
@@ -1439,7 +1461,9 @@ function onNodeDragStop(payload) {
     }
     orient()
     target.data.collapsed = false
-    notify(`Moved “${nodeLabel(node)}” to “${nodeLabel(target)}”`)
+    notify(movedRoots.length === 1
+      ? `Moved “${nodeLabel(movedRoots[0])}” to “${nodeLabel(target)}”`
+      : `Moved ${pluralNodes(movedRoots.length)} to “${nodeLabel(target)}”`)
   } else if (autoLayout.value) {
     // The node was moved by hand — layout no longer puts it back.
     autoLayout.value = false
@@ -1447,6 +1471,7 @@ function onNodeDragStop(payload) {
   }
   if (autoLayout.value) relayout(false)
   applyVisibility()
+  dragRoots = []
   record(dragStart)
   dragStart = null
 }
@@ -2572,7 +2597,12 @@ onBeforeUnmount(() => {
 
         <svg v-if="alignmentGuides.length || dragPreview?.mode === 'attach'" class="drag-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
-            <path v-if="dragPreview?.mode === 'attach'" :d="dragPreview.path" :style="{ stroke: paint(dragPreview.color) }" />
+            <path
+              v-for="path in dragPreview?.mode === 'attach' ? dragPreview.paths : []"
+              :key="path.id"
+              :d="path.path"
+              :style="{ stroke: paint(path.color) }"
+            />
             <line
               v-for="(guide, index) in alignmentGuides"
               :key="index"
