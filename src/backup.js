@@ -3,9 +3,11 @@
 
 export const BACKUP_DELAY = 5000
 
-// What counts as an edit worth uploading. Positions of an auto-layout map are derived and drift between devices
-// (fonts measure differently), so a map that was only opened must not look changed.
-export const backupKey = (map) => JSON.stringify(map, (key, value) => (key === 'position' && map.autoLayout ? undefined : value))
+// What counts as an edit worth uploading. In an auto-layout map the layout derives where a node sits, on which side
+// of the root its branch lands and how its line attaches — from measured text, so it drifts between devices.
+// A map that was only opened must not look changed.
+const DERIVED_BY_LAYOUT = new Set(['position', 'side', 'sourceHandle', 'targetHandle'])
+export const backupKey = (map) => JSON.stringify(map, (key, value) => (map.autoLayout && DERIVED_BY_LAYOUT.has(key) ? undefined : value))
 
 export const backupFileName = (title) => `${String(title ?? '').trim() || 'Untitled'}.mindmap`
 

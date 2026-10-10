@@ -5,11 +5,22 @@ import {
   replaceBackup, restoreBackup,
 } from '../src/backup.js'
 
-test('auto-layout positions are not an edit, manual positions are', () => {
-  const map = (x, autoLayout) => ({ title: 'A', autoLayout, nodes: [{ id: 'n', position: { x, y: 0 }, data: { label: 'One' } }] })
-  assert.equal(backupKey(map(0, true)), backupKey(map(40, true)))
-  assert.notEqual(backupKey(map(0, false)), backupKey(map(40, false)))
-  assert.notEqual(backupKey(map(0, true)), backupKey({ ...map(0, true), title: 'B' }))
+test('what auto-layout derives is not an edit; the same fields placed by hand are', () => {
+  const map = (autoLayout, { x = 0, side = 'right', handle = 'source-right' } = {}) => ({
+    title: 'A',
+    autoLayout,
+    nodes: [{ id: 'n', position: { x, y: 0 }, data: { label: 'One', side } }],
+    edges: [{ id: 'e', source: 'root', target: 'n', sourceHandle: handle, targetHandle: handle.replace('source', 'target') }],
+  })
+  // Another device measures text differently: nodes move, a branch lands on the other side, its line re-attaches.
+  for (const drift of [{ x: 40 }, { side: 'left' }, { handle: 'source-left' }]) {
+    assert.equal(backupKey(map(true)), backupKey(map(true, drift)), JSON.stringify(drift))
+    assert.notEqual(backupKey(map(false)), backupKey(map(false, drift)), JSON.stringify(drift))
+  }
+  assert.notEqual(backupKey(map(true)), backupKey({ ...map(true), title: 'B' }))
+  const reordered = map(true)
+  reordered.nodes.push({ id: 'm', position: { x: 0, y: 0 }, data: { label: 'Two', side: 'left' } })
+  assert.notEqual(backupKey(reordered), backupKey({ ...reordered, nodes: [...reordered.nodes].reverse() }))
 })
 
 test('remote check accepts metadata-only changes and stops on content or lineage changes', () => {

@@ -62,7 +62,7 @@ import {
   toggleMark,
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
-import { BACKUP_VIEW, DRIVE_MESSAGES, backupKey, backupUi, createBackup, createBackupQueue, errorKind, linkedDocument, replaceBackup, pushBackup } from './backup.js'
+import { BACKUP_VIEW, DRIVE_MESSAGES, backupKey, backupUi, createBackup, createBackupQueue, errorKind, linkedDocument, pushBackup, replaceBackup, restoreBackup } from './backup.js'
 import * as drive from './google-drive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
 import {
@@ -160,6 +160,7 @@ const driveStatus = reactive({})
 const driveBusy = ref('')
 const driveDialog = ref(null)
 const driveDialogBox = ref(null)
+const importOpen = ref(false)
 // Map id → the content this session last saw, to tell an edit from a map that was only opened.
 const backupKeys = new Map()
 // Read out by screen readers when the Drive state of the open map changes.
@@ -2323,6 +2324,7 @@ function closeMenus() {
 
 function closeDocumentMenuState() {
   rowMenu.value = null
+  importOpen.value = false
   documentQuery.value = ''
   if (renamingDocId.value) commitDocumentRename()
 }
@@ -2401,10 +2403,14 @@ function onDocumentMenuKeydown(event) {
     const id = rowMenu.value.id
     rowMenu.value = null
     nextTick(() => focusDocumentRow(id))
+  } else if (importOpen.value) {
+    importOpen.value = false
+    nextTick(() => documentMenu.value?.querySelector('.import-button')?.focus())
   } else closeMenus()
 }
 
 function openRowMenu(id, row, viaKeyboard = false) {
+  importOpen.value = false
   if (rowMenu.value?.id === id) {
     rowMenu.value = null
     return
@@ -2517,6 +2523,15 @@ function finishRename() {
 function importFile() {
   closeMenus()
   fileInput.value.click()
+}
+
+// With Google Drive available, Import offers two sources (10a).
+function toggleImport() {
+  rowMenu.value = null
+  importOpen.value = !importOpen.value
+  if (!importOpen.value) return
+  drive.preload().catch(() => {})
+  nextTick(() => documentMenu.value?.querySelector('.import-menu button')?.focus())
 }
 
 function switchDocument(id, { keepMenu = false } = {}) {
@@ -2687,10 +2702,14 @@ async function exportMap(format) {
   }
 }
 
-async function loadFile(event) {
+function loadFile(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
-  if (!file) return
+  if (file) importMapFile(file)
+}
+
+// Opens a map file as a new map and says whether it worked. A file that cannot be read leaves nothing behind.
+async function importMapFile(file, { quiet = false } = {}) {
   let importedAssetIds = []
   try {
     const imported = await readMindmapFile(file)
@@ -2717,11 +2736,38 @@ async function loadFile(event) {
     else map = normalizeMap(JSON.parse(imported.text))
     if (!addDocument(map)) throw new Error('The map could not be saved on this device.')
     importedAssetIds = []
-    notify(`Added: ${file.name}`)
+    if (!quiet) notify(`Added: ${file.name}`)
+    return true
   } catch (error) {
     if (importedAssetIds.length) await deleteImageAssets(importedAssetIds).catch(() => {})
     notify(error instanceof Error ? error.message : 'Could not open the file')
+    return false
   }
+}
+
+// Restoring is importing: the Drive file becomes a new map on this device that keeps saving to the same file.
+// Nothing is uploaded here — the file as found is the baseline, and the first edit starts the uploads.
+function restoreFromDrive() {
+  return driveAction('restore', async () => {
+    await ensureSignedIn()
+    const file = await drive.pickFile()
+    if (!file) return
+    // A map waiting for Undo must not come back next to its own restored copy.
+    finalizeDeletion()
+    const existing = linkedDocument(documents.value, file.id)
+    if (existing) {
+      switchDocument(existing.id)
+      notify(`This copy is already connected — opened “${documentTitle(existing)}”`, { dot: 'ok' })
+      return
+    }
+    const restored = await restoreBackup(drive, file.id)
+    if (restored.outcome !== 'ok') return notify(DRIVE_MESSAGES.missing)
+    if (!(await importMapFile(restored.file, { quiet: true }))) return
+    activeDocument.value.googleDriveBackup = restored.backup
+    // This save takes the first look at the new map, which becomes the mark edits are told from.
+    persistDocuments(false)
+    closeMenus()
+  })
 }
 
 const appMenuItems = () => [...(appMenu.value?.querySelectorAll('[role^="menuitem"]') ?? [])]
@@ -2889,6 +2935,8 @@ function onKeydown(event) {
     undoDeletion()
     return
   }
+  // Esc inside the maps menu is the menu's own: it closes an open submenu first, then the menu.
+  if (event.key === 'Escape' && target instanceof Element && target.closest('.document-menu')) return
   // Keys inside the menu must not edit the map on the canvas; the icon set still takes its own keys.
   if (event.key !== 'Escape' && target instanceof Element && target.closest('.island, .island-menu, .row-menu, .app-menu, .undo-toast')
     && !(target.closest('.mark-wrap') && (shortcut?.id === 'marks' || shortcut?.id === 'mark'))) return
@@ -3390,7 +3438,7 @@ onBeforeUnmount(() => {
           class="island-menu document-menu"
           role="menu"
           aria-label="Maps"
-          @click.stop="rowMenu = null"
+          @click.stop="rowMenu = null; importOpen = false"
           @keydown="onDocumentMenuKeydown"
         >
           <section class="storage" aria-label="Storage">
@@ -3501,9 +3549,26 @@ onBeforeUnmount(() => {
             <button class="outline-button" role="menuitem" @click="newMap">
               <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>New
             </button>
-            <button class="outline-button" role="menuitem" @click="importFile">
+            <button v-if="!DRIVE_ENABLED" class="outline-button" role="menuitem" @click="importFile">
               <svg viewBox="0 0 16 16"><path d="M8 10V2M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>Import
             </button>
+            <button
+              v-else
+              class="outline-button import-button"
+              :class="{ open: importOpen }"
+              role="menuitem"
+              aria-haspopup="menu"
+              :aria-expanded="importOpen"
+              @click.stop="toggleImport"
+            >
+              <svg viewBox="0 0 16 16"><path d="M8 10V2M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>Import
+              <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>
+            </button>
+          </div>
+
+          <div v-if="importOpen" class="import-menu" role="menu" aria-label="Import" @click.stop @keydown="onRowMenuKeydown">
+            <button role="menuitem" @click="importFile"><strong>From a file</strong><small>.mindmap, OPML or Markdown</small></button>
+            <button role="menuitem" :disabled="Boolean(driveBusy)" @click="restoreFromDrive"><strong>From Google Drive</strong><small>The map keeps saving to the file you choose</small></button>
           </div>
 
           <div

@@ -315,6 +315,14 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .outline-button { display: flex; align-items: center; justify-content: center; gap: 6px; height: 34px; color: var(--ink); background: var(--surface); border: 1px solid var(--border) !important; border-radius: 8px; font-weight: 500; }
 .outline-button:hover { background: var(--hover); }
 .outline-button svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.outline-button.open, .outline-button.open:hover { background: var(--pressed); }
+.outline-button svg.chevron { width: 12px; height: 12px; color: var(--muted); }
+/* Import sources (10a): opens to the right of the maps menu, level with its bottom row. */
+.import-menu { position: absolute; bottom: 6px; left: calc(100% + 4px); display: flex; flex-direction: column; width: 248px; padding: 4px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-menu); }
+.import-menu button { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; color: var(--ink); background: transparent; border-radius: 6px; text-align: left; outline: none; }
+.import-menu button:hover:not(:disabled), .import-menu button:focus-visible { background: var(--hover); }
+.import-menu strong { font-size: 14px; font-weight: 400; }
+.import-menu small { color: var(--muted-2); font-size: 12px; text-wrap: pretty; }
 .menu-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 34px; padding: 0 10px; color: var(--ink); background: transparent; border-radius: 8px; text-align: left; }
 .menu-item:hover:not(:disabled) { background: var(--hover); }
 .menu-item.danger { display: block; overflow: hidden; color: var(--danger); text-overflow: ellipsis; white-space: nowrap; line-height: 34px; }

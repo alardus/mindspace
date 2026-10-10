@@ -36,6 +36,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 - **Branch palettes.** Bright, Calm, or Mono, plus per-branch colors inherited by children.
 - **Light and dark themes.** Follows your system or set manually; branch colors adapt to each theme.
 - **Import and export.** `.mindmap` files for backups (images included), plus OPML and Markdown outlines.
+- **Optional Google Drive backup.** Keep a copy of any map in your own Google Drive, updated a few seconds after each change, and restore it on another device. Off until you connect a map.
 - **Local-first.** Everything lives in your browser storage. No account, no server, no tracking.
 
 <details>
@@ -87,7 +88,23 @@ The app version and repository URL come from `package.json` and appear in the ap
 
 ## Where your data lives
 
-Maps are stored in your browser on this device only: the map library in `localStorage` (`mindspace-library-v1`) and images in IndexedDB (`mindspace-assets-v1`). Clearing site data removes them, so export a backup from **Export → Mindspace file** if a map matters to you. Nothing is sent to any server.
+Maps are stored in your browser on this device only: the map library in `localStorage` (`mindspace-library-v1`) and images in IndexedDB (`mindspace-assets-v1`). Clearing site data removes them, so export a backup from **Export → Mindspace file** if a map matters to you, or connect it to Google Drive.
+
+Nothing is sent to any server. The one exception is a map you connect to Google Drive yourself: its `.mindmap` file goes from your browser straight to your own Drive.
+
+## Google Drive backup
+
+Open the maps menu and press **Connect** next to Google Drive (or **⋯ → Save to Google Drive** on any map). Choose a new file in a `Mindspace` folder in your Drive, or an existing `.mindmap` to replace. From then on the file is updated about five seconds after each change. The browser stays the primary store: if Drive is unreachable, editing and local saving go on as usual.
+
+To open a map on another device, use **Import → From Google Drive**. The restored map keeps saving to the same file.
+
+What it is not:
+
+- **Not sync.** A change made elsewhere is never pulled into a map that is already open, and never overwritten silently. If the file in Drive was changed by another device, the backup of that map stops and the menu offers a choice: save to a new file, replace the file in Drive, or pick another file. To get the other version, import it as a separate map.
+- **Not collaboration.** Two devices editing the same map at the same moment can both pass the check before either upload lands, and one upload then replaces the other. Mindspace notices on the next change and stops; the lost version may still be in the file's version history in Drive. Use one device at a time.
+- **Not a cloud library.** Each map has its own file. Deleting a map here does not delete its file in Drive, and a file removed in Drive only disconnects the map.
+
+Privacy: there is no Mindspace server. Your browser talks to Google directly and asks only for per-file access (`drive.file`) — the app can see the files it created and the ones you pick for it, nothing else in your Drive. The sign-in is kept in memory and is never stored, so Google may ask you to sign in again after a reload or about an hour of work; changes made meanwhile wait on the device and are sent once you do.
 
 ## Contributing
 
@@ -104,6 +121,7 @@ Where things are:
 - `src/model.js`: the map model: normalization, layout, palettes, OPML/Markdown, and the welcome map.
 - `src/MarkIcon.vue`: the icon marks drawn on nodes, in the icon set, and on the canvas.
 - `src/assets.js`, `src/archive.js`: local image storage and `.mindmap` archives.
+- `src/backup.js`, `src/google-drive.js`: Google Drive backup: the decisions (what counts as an edit, when to stop) and the calls to Google.
 - `src/shortcuts.js`: the shortcut registry behind the key handlers and the help dialog.
 - `src/style.css`: styles and theme tokens.
 - `test/`: unit tests.
