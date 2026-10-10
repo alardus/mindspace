@@ -162,6 +162,8 @@ const driveDialog = ref(null)
 const driveDialogBox = ref(null)
 // Map id → the content this session last saw, to tell an edit from a map that was only opened.
 const backupKeys = new Map()
+// Read out by screen readers when the Drive state of the open map changes.
+const announcement = ref('')
 const appMenuOpen = ref(false)
 const appMenu = ref(null)
 const brandButton = ref(null)
@@ -289,12 +291,21 @@ const documentById = (id) => documents.value.find((document) => document.id === 
 const driveKeyOf = (document) => (DRIVE_ENABLED ? backupUi(document?.googleDriveBackup, driveStatus[document?.id]) : 'off')
 const activeDrive = computed(() => {
   const key = driveKeyOf(activeDocument.value)
-  return { key, view: BACKUP_VIEW[key], backup: activeDocument.value?.googleDriveBackup }
+  const view = BACKUP_VIEW[key]
+  const note = key === 'failed' && driveStatus[activeId.value]?.reason === 'quota' ? view.quotaNote : view?.note
+  return { key, view, note, backup: activeDocument.value?.googleDriveBackup }
 })
 const driveFileUrl = (fileId) => `https://drive.google.com/file/d/${fileId}/view`
 const driveFileLabel = (backup) => (backup.folder ? `${backup.folder} / ${backup.name}` : backup.name)
-// What the ⋯ menu of a map offers for Drive, by the state of that map.
-const rowMenuDrive = computed(() => (DRIVE_ENABLED && rowMenu.value ? driveKeyOf(documentById(rowMenu.value.id)) : ''))
+// What the ⋯ menu of a map offers for Drive, by the state of that map. A healthy linked map gets nothing.
+const rowMenuDrive = computed(() => {
+  const id = rowMenu.value?.id
+  const key = DRIVE_ENABLED && id ? driveKeyOf(documentById(id)) : ''
+  if (key === 'off') return { label: 'Save to Google Drive', run: () => openConnect(id) }
+  if (key === 'conflict' || key === 'readonly') return { label: 'Choose a file in Google Drive', run: () => chooseDriveFile(id) }
+  if (key === 'auth') return { label: 'Sign in to Google', run: () => signInToDrive(id) }
+  return null
+})
 const driveDialogMap = computed(() => {
   const target = documentById(driveDialog.value?.id)
   return target ? documentTitle(target) : ''
@@ -477,11 +488,12 @@ function redo() {
 }
 
 // dot and action make it a status toast (10c): the look of the Undo toast, six seconds, an optional action on the right.
-function notify(message, { duration = 2600, tip = false, dot = '', action = null } = {}) {
+function notify(message, { duration = 2600, tip = false, dot = '', action = null, about = null } = {}) {
   toast.value = message
   toastTip.value = tip || Boolean(dot)
   toastDot.value = dot
   toastAction.value = action
+  toastAbout = about
   clearTimeout(rowClickTimer)
   finalizeDeletion()
   startToastTimer(dot ? 6000 : duration)
@@ -489,6 +501,11 @@ function notify(message, { duration = 2600, tip = false, dot = '', action = null
 
 let toastDeadline = 0
 let toastRemaining = 0
+// The map a status toast speaks about: once that map's Drive state moves on, the toast is stale and goes.
+let toastAbout = null
+function dropToastAbout(id) {
+  if (toast.value && toastAbout === id) toast.value = ''
+}
 function startToastTimer(ms) {
   clearTimeout(toastTimer)
   toastDeadline = Date.now() + ms
@@ -2091,6 +2108,7 @@ async function runBackup(id) {
 
 function applyBackupResult(target, { outcome, backup }, sentKey) {
   const id = target.id
+  const before = driveKeyOf(target)
   const missing = driveStatus[id]?.missing ? { missing: true } : {}
   if (outcome === 'saved') {
     // An edit made during the upload is still on its way.
@@ -2109,6 +2127,17 @@ function applyBackupResult(target, { outcome, backup }, sentKey) {
   else if (outcome === 'readonly' || outcome === 'offline') setDriveStatus(id, outcome)
   else setDriveStatus(id, 'failed', outcome === 'quota' ? { reason: 'quota' } : {})
   persistDocuments(false)
+  // Toasts only when the state changes, not on every failed attempt. A lost network or a failed upload gets none.
+  const after = driveKeyOf(target)
+  if (after === before) return
+  dropToastAbout(id)
+  const name = documentTitle(target)
+  if (after === 'off') notify(`The file for “${name}” was removed from Google Drive. The map is still on this device`, { dot: 'idle', about: id })
+  else if (after === 'conflict') {
+    notify(`“${name}” was changed elsewhere — saving to Drive stopped`, { dot: 'warn', about: id, action: { label: 'Details', run: () => showStorage(id) } })
+  } else if (after === 'auth') {
+    notify('Sign in to Google again — the copy is paused', { dot: 'warn', about: id, action: { label: 'Sign in', run: () => signInToDrive(id) } })
+  }
 }
 
 // The Drive file is gone. The map stays, and can be connected again.
@@ -2116,6 +2145,41 @@ function unlinkBackup(target) {
   delete target.googleDriveBackup
   backupKeys.delete(target.id)
   setDriveStatus(target.id, null)
+}
+
+// The Storage block speaks for the open map only.
+function showStorage(id) {
+  if (id !== activeId.value && documentById(id)) switchDocument(id, { keepMenu: true })
+  if (!documentsOpen.value) toggleDocuments()
+}
+
+// A file that was not found is looked up under the account the user picks now; a second miss lets the link go.
+function signInToDrive(id) {
+  rowMenu.value = null
+  return driveAction('signin', async () => {
+    const missing = Boolean(driveStatus[id]?.missing)
+    if (missing || !drive.hasToken()) await drive.signIn({ chooseAccount: missing })
+    resumeBackups()
+  })
+}
+
+// Signed in: everything that waited for it goes out now.
+function resumeBackups() {
+  for (const target of documents.value) {
+    const backup = target.googleDriveBackup
+    const status = driveStatus[target.id]
+    if (backup?.state !== 'linked' || (status?.status !== 'auth' && !backup.pending)) continue
+    if (status?.status === 'auth') {
+      setDriveStatus(target.id, 'saving', status.missing ? { missing: true } : {})
+      dropToastAbout(target.id)
+    }
+    enqueueBackup(target.id, true)
+  }
+}
+
+// The network is back, or the user is: whatever waited for a connection tries again.
+function retryOfflineBackups() {
+  for (const [id, status] of Object.entries(driveStatus)) if (status.status === 'offline') enqueueBackup(id, true)
 }
 
 function linkBackup(id, backup, map) {
@@ -2128,13 +2192,20 @@ function linkBackup(id, backup, map) {
   persistDocuments(false)
   notify(`“${documentTitle(target)}” now saves to Google Drive`, {
     dot: 'ok',
+    about: id,
     action: { label: 'Open', run: () => window.open(driveFileUrl(backup.fileId), '_blank', 'noopener') },
   })
 }
 
+// Where the focus goes when a Drive dialog closes: the control its flow started from.
+let driveDialogReturn = null
+
 // A Drive action started by the user, one at a time. A closed sign-in window or picker is not an error.
 async function driveAction(name, work) {
   if (driveBusy.value) return
+  // The control the flow started from is remembered now: once disabled, it drops the focus.
+  const origin = document.activeElement
+  if (!driveDialog.value) driveDialogReturn = origin
   driveBusy.value = name
   try {
     await work()
@@ -2143,10 +2214,11 @@ async function driveAction(name, work) {
     if (kind !== 'cancelled') notify(DRIVE_MESSAGES[kind] ?? DRIVE_MESSAGES.failed)
   } finally {
     driveBusy.value = ''
-    // A button that was disabled meanwhile has dropped the focus.
     nextTick(() => {
       const box = driveDialogBox.value
-      if (box && !box.contains(document.activeElement)) box.querySelector('[data-autofocus]')?.focus()
+      if (box) {
+        if (!box.contains(document.activeElement)) box.querySelector('[data-autofocus]')?.focus()
+      } else if (document.activeElement === document.body && origin instanceof HTMLElement && origin.isConnected) origin.focus()
     })
   }
 }
@@ -2157,11 +2229,8 @@ async function ensureSignedIn(options) {
   resumeBackups()
 }
 
-function resumeBackups() {}
-
-let driveDialogReturn = null
 function openDriveDialog(dialog) {
-  if (!driveDialog.value) driveDialogReturn = document.activeElement
+  if (!driveDialog.value && !driveBusy.value) driveDialogReturn = document.activeElement
   rowMenu.value = null
   driveDialog.value = dialog
   nextTick(() => driveDialogBox.value?.querySelector('[data-autofocus]')?.focus())
@@ -2211,6 +2280,7 @@ function saveToNewFile(id) {
 
 // Writing into an existing file always goes through the confirmation.
 function chooseDriveFile(id) {
+  rowMenu.value = null
   return driveAction('pick', async () => {
     await ensureSignedIn()
     const file = await drive.pickFile()
@@ -2887,6 +2957,14 @@ function onNodesChange(changes) {
   })
 }
 
+// The Drive state of the open map is read out when it changes. “Saving…” is not, and neither is the “saved” that follows it.
+let announcedDrive = activeDrive.value.key
+watch(() => activeDrive.value.key, (key) => {
+  if (key === 'saving' || key === announcedDrive) return
+  announcedDrive = key
+  announcement.value = BACKUP_VIEW[key]?.say ?? ''
+})
+
 watch(inspectorOpen, (open) => {
   try {
     localStorage.setItem(INSPECTOR_KEY, open ? '1' : '0')
@@ -2921,6 +2999,12 @@ onMounted(() => {
   pruneImageAssets(usedAssets).catch(() => {})
   // Someone who already keeps a map in Drive gets Google's scripts ahead of the first sign-in click.
   if (DRIVE_ENABLED && documents.value.some((document) => document.googleDriveBackup)) drive.preload().catch(() => {})
+  // An edit that did not reach Drive before the page was closed: nothing can be sent without signing in, so say so — quietly.
+  if (DRIVE_ENABLED) {
+    for (const { id, googleDriveBackup: backup } of documents.value) if (backup?.pending && backup.state === 'linked') setDriveStatus(id, 'auth')
+  }
+  window.addEventListener('focus', retryOfflineBackups)
+  window.addEventListener('online', retryOfflineBackups)
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('keyup', onLinkModifierKeyup)
@@ -2950,6 +3034,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('keyup', onLinkModifierKeyup)
   window.removeEventListener('blur', clearLinkModifier)
+  window.removeEventListener('focus', retryOfflineBackups)
+  window.removeEventListener('online', retryOfflineBackups)
   window.removeEventListener('pointerdown', onWindowPointerDown)
   window.removeEventListener('copy', onCopy)
   window.removeEventListener('paste', onPaste)
@@ -3329,6 +3415,25 @@ onBeforeUnmount(() => {
                 <span>{{ driveFileLabel(activeDrive.backup) }}</span>
                 <a :href="driveFileUrl(activeDrive.backup.fileId)" target="_blank" rel="noopener" title="Open in Google Drive">Open ↗</a>
               </div>
+              <div v-if="activeDrive.note" class="storage-note">
+                <span>{{ activeDrive.note }}</span>
+                <button v-if="activeDrive.key === 'failed'" @click="enqueueBackup(activeId, true)">Retry</button>
+              </div>
+              <div v-if="activeDrive.view?.alert" class="drive-alert" role="status">
+                <p><b>{{ activeDrive.view.alert.title }}</b> {{ activeDrive.view.alert.text.replace('{name}', activeDrive.backup.name) }}</p>
+                <div class="drive-alert-actions">
+                  <button v-if="activeDrive.key === 'auth'" class="primary" :disabled="Boolean(driveBusy)" @click="signInToDrive(activeId)">Sign in to Google</button>
+                  <template v-else>
+                    <button class="primary" :disabled="Boolean(driveBusy)" @click="saveToNewFile(activeId)">Save to a new file</button>
+                    <button
+                      v-if="activeDrive.key === 'conflict'"
+                      :disabled="Boolean(driveBusy)"
+                      @click="askReplace(activeId, { id: activeDrive.backup.fileId, name: activeDrive.backup.name })"
+                    >Replace file in Drive</button>
+                  </template>
+                </div>
+                <button v-if="activeDrive.key !== 'auth'" class="drive-alert-link" :disabled="Boolean(driveBusy)" @click="chooseDriveFile(activeId)">Choose another file in Google Drive…</button>
+              </div>
             </template>
           </section>
           <label v-if="documents.length > 6" class="document-search">
@@ -3411,10 +3516,10 @@ onBeforeUnmount(() => {
           >
             <button role="menuitem" @click="startDocumentRename(rowMenu.id)"><span>Rename</span><kbd>F2</kbd></button>
             <button role="menuitem" @click="duplicateDocument(rowMenu.id)"><span>Duplicate</span><kbd>{{ keyLabel('Mod') }}D</kbd></button>
-            <template v-if="rowMenuDrive === 'off'">
+            <template v-if="rowMenuDrive">
               <hr />
-              <button role="menuitem" @click="openConnect(rowMenu.id)">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path :d="CLOUD"/></svg><span>Save to Google Drive</span>
+              <button role="menuitem" @click="rowMenuDrive.run()">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path :d="CLOUD"/></svg><span>{{ rowMenuDrive.label }}</span>
               </button>
             </template>
             <hr />
@@ -3822,6 +3927,8 @@ onBeforeUnmount(() => {
         <hr />
         <button class="danger" :disabled="nodes.find((node) => node.id === contextMenu.id)?.data.root && rootCount === 1" @click="removeSelected"><span>⌫</span>Delete branch</button>
       </div>
+
+      <div class="visually-hidden" aria-live="polite">{{ announcement }}</div>
 
       <Transition name="toast">
         <div

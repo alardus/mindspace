@@ -255,6 +255,19 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .storage-file span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .storage-file a { flex: none; color: var(--text-2); text-decoration: none; }
 .storage-file a:hover, .storage-file a:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
+.storage-note { display: flex; align-items: flex-start; gap: 8px; margin-top: -4px; padding: 0 6px 0 32px; color: var(--muted); font-size: 12px; line-height: 1.45; text-wrap: pretty; }
+.storage-note span { flex: 1; }
+.island-menu .storage-note button { flex: none; padding: 0; color: var(--text-2); background: transparent; font-size: 12px; line-height: inherit; }
+.island-menu .storage-note button:hover { text-decoration: underline; text-underline-offset: 2px; }
+/* A backup that needs a reaction (10a): yellow, not red — the data is safe on this device. */
+.drive-alert { display: flex; flex-direction: column; gap: 10px; margin: 4px 2px 0; padding: 10px 12px 12px; background: var(--warn-bg); border-radius: 8px; }
+.drive-alert p { margin: 0; font-size: 13px; line-height: 1.45; text-wrap: pretty; }
+.drive-alert-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.island-menu .drive-alert-actions button { height: 30px; padding: 0 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 7px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.island-menu .drive-alert-actions button:hover:not(:disabled) { background: var(--hover); }
+.island-menu .drive-alert-actions button.primary { color: var(--on-primary); background: var(--primary); border-color: transparent; }
+.island-menu .drive-alert-actions button.primary:hover:not(:disabled) { background: var(--primary-hover); }
+.island-menu .drive-alert-link { align-self: flex-start; padding: 0; color: var(--text-2); background: transparent; font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
 .document-item small, .menu-item small { color: var(--muted-2); font-size: 12px; }
 .document-search { display: flex; align-items: center; gap: 8px; height: 36px; margin: 0 2px 6px; padding: 0 10px; background: var(--canvas); border-radius: 8px; }
 .document-search svg { flex: none; width: 14px; height: 14px; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; }
