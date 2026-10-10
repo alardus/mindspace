@@ -1,4 +1,4 @@
-import { DEFAULT_SIZE, MAX_LABEL_LENGTH, descendantsOf, makeEdge, makeNode, selectedBranchRoots } from './model.js'
+import { DEFAULT_SIZE, MAX_LABEL_LENGTH, descendantsOf, makeEdge, makeNode, normalizeLinks, selectedBranchRoots } from './model.js'
 
 export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
@@ -41,14 +41,7 @@ const cleanNode = (node) => ({
   },
 })
 
-const cleanEdge = (edge) => ({
-  id: edge.id,
-  source: edge.source,
-  target: edge.target,
-  data: { kind: edge.data?.kind === 'link' ? 'link' : 'tree' },
-  ...(edge.sourceHandle ? { sourceHandle: edge.sourceHandle } : {}),
-  ...(edge.targetHandle ? { targetHandle: edge.targetHandle } : {}),
-})
+const cleanEdge = (edge) => ({ id: edge.id, source: edge.source, target: edge.target, data: { kind: 'tree' } })
 
 function outlineText(nodes, edges, roots) {
   const byId = new Map(nodes.map((node) => [node.id, node]))
@@ -72,7 +65,8 @@ function outlineText(nodes, edges, roots) {
   return lines.join('\n')
 }
 
-export function serializeClipboardBranches(nodes, edges, selectedIds) {
+// Links travel with a copy only when both of their blocks do.
+export function serializeClipboardBranches(nodes, edges, selectedIds, links = []) {
   const existing = new Set(nodes.map((node) => node.id))
   const selected = [...new Set(selectedIds)].filter((id) => existing.has(id))
   const roots = selectedBranchRoots(selected, edges)
@@ -81,7 +75,8 @@ export function serializeClipboardBranches(nodes, edges, selectedIds) {
   const copiedEdges = edges
     .filter((edge) => included.has(edge.source) && included.has(edge.target))
     .map(cleanEdge)
-  const payload = { version: 1, roots, nodes: copiedNodes, edges: copiedEdges }
+  const copiedLinks = links.filter((link) => included.has(link.from) && included.has(link.to)).map((link) => ({ ...link }))
+  const payload = { version: 1, roots, nodes: copiedNodes, edges: copiedEdges, ...(copiedLinks.length ? { links: copiedLinks } : {}) }
   return {
     custom: JSON.stringify(payload),
     text: outlineText(copiedNodes, copiedEdges, roots),
@@ -93,23 +88,21 @@ function normalizedEdges(input, ids) {
   const edges = []
   const parent = new Map()
   for (const edge of input) {
-    if (!ids.has(edge?.source) || !ids.has(edge?.target) || edge.source === edge.target) continue
-    const kind = edge.data?.kind === 'link' ? 'link' : 'tree'
-    if (kind === 'tree') {
-      if (parent.has(edge.target)) continue
-      let cyclic = false
-      const seen = new Set()
-      for (let ancestor = edge.source; ancestor && !seen.has(ancestor); ancestor = parent.get(ancestor)) {
-        if (ancestor === edge.target) {
-          cyclic = true
-          break
-        }
-        seen.add(ancestor)
+    // A link edge copied by a version before 9a is dropped, never turned into a branch.
+    if (!ids.has(edge?.source) || !ids.has(edge?.target) || edge.source === edge.target
+      || edge.data?.kind === 'link' || parent.has(edge.target)) continue
+    let cyclic = false
+    const seen = new Set()
+    for (let ancestor = edge.source; ancestor && !seen.has(ancestor); ancestor = parent.get(ancestor)) {
+      if (ancestor === edge.target) {
+        cyclic = true
+        break
       }
-      if (cyclic) continue
-      parent.set(edge.target, edge.source)
+      seen.add(ancestor)
     }
-    edges.push({ ...edge, data: { kind } })
+    if (cyclic) continue
+    parent.set(edge.target, edge.source)
+    edges.push({ ...edge, data: { kind: 'tree' } })
   }
   return edges
 }
@@ -147,19 +140,15 @@ export function parseMindspaceClipboard(json, createId = uid) {
     ...node.data,
     root: !childIds.has(node.id),
   }))
-  const edges = sourceEdges.map((edge) => {
-    const copy = makeEdge(idMap.get(edge.source), idMap.get(edge.target), edge.data.kind, createId())
-    if (edge.data.kind === 'link') {
-      copy.sourceHandle = edge.sourceHandle
-      copy.targetHandle = edge.targetHandle
-    }
-    return copy
-  })
+  const edges = sourceEdges.map((edge) => makeEdge(idMap.get(edge.source), idMap.get(edge.target), createId()))
+  const links = normalizeLinks(input.links, originalIds)
+    .map((link) => ({ ...link, id: createId(), from: idMap.get(link.from), to: idMap.get(link.to) }))
   return {
     source: 'mindspace',
     roots: sourceNodes.filter((node) => !childIds.has(node.id)).map((node) => idMap.get(node.id)),
     nodes,
     edges,
+    links,
   }
 }
 
@@ -217,7 +206,7 @@ function fragmentFromItems(items, source, createId) {
     const parent = depth ? parents[depth - 1] : null
     parents.splice(depth)
     parents[depth] = index
-    if (parent !== null) edges.push(makeEdge(ids[parent], ids[index], 'tree', createId()))
+    if (parent !== null) edges.push(makeEdge(ids[parent], ids[index], createId()))
   })
   return { source, roots, nodes, edges }
 }

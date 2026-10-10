@@ -171,15 +171,105 @@ export function referencedAssetIds(map) {
   return new Set(map?.nodes?.flatMap((node) => node.data?.image?.assetId ? [node.data.image.assetId] : []) ?? [])
 }
 
-export const LINK_ANCHORS = ['left', 'right', 'top'].flatMap((side) => [25, 50, 75].map((offset, index) => ({
-  id: `link-${side}-${index + 1}`,
-  side,
-  offset,
-})))
+export function makeEdge(source, target, id = uid()) {
+  return { id, source, target, type: 'branch', class: 'tree-edge', data: { kind: 'tree' } }
+}
 
-export function makeEdge(source, target, kind = 'tree', id = uid()) {
-  const edgeKind = kind === 'link' ? 'link' : 'tree'
-  return { id, source, target, type: edgeKind === 'tree' ? 'branch' : 'smoothstep', class: edgeKind === 'link' ? 'relation-edge' : 'tree-edge', data: { kind: edgeKind } }
+// Links outside the tree (9a) are a list of their own, like free marks: { id, from, to, label?, arrows? }.
+// arrows is 'end' unless stored. Sides and control points are never stored: they follow the blocks, see linkSides.
+export const MAX_LINK_LABEL = 100
+
+// No link from a block to itself, and no second link between the same two blocks in the same direction.
+export const canLink = (links, from, to, exceptId) => from !== to
+  && !links.some((link) => link.id !== exceptId && link.from === from && link.to === to)
+
+export function normalizeLinks(input, nodeIds) {
+  if (!Array.isArray(input)) return []
+  const ids = new Set()
+  const links = []
+  for (const item of input.slice(0, 10000)) {
+    if (!nodeIds.has(item?.from) || !nodeIds.has(item?.to) || !canLink(links, item.from, item.to)) continue
+    const id = typeof item.id === 'string' && item.id && !ids.has(item.id) ? item.id : uid()
+    ids.add(id)
+    const label = typeof item.label === 'string' ? item.label.trim().slice(0, MAX_LINK_LABEL) : ''
+    links.push({
+      id,
+      from: item.from,
+      to: item.to,
+      ...(label ? { label } : {}),
+      ...(item.arrows === 'both' || item.arrows === 'none' ? { arrows: item.arrows } : {}),
+    })
+  }
+  return links
+}
+
+export const LINK_FRAME = 6
+const SIDE_NORMALS = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] }
+const OPPOSITE_SIDE = { top: 'bottom', right: 'left', bottom: 'top', left: 'right' }
+
+// A block's link frame is its box grown by 6px. A link holds on to the middle of one of the frame's sides.
+export const linkFrame = (rect, grow = LINK_FRAME) => ({
+  x: rect.x - grow,
+  y: rect.y - grow,
+  width: rect.width + 2 * grow,
+  height: rect.height + 2 * grow,
+})
+
+export function linkAnchor(rect, side, grow = LINK_FRAME) {
+  const frame = linkFrame(rect, grow)
+  const [nx, ny] = SIDE_NORMALS[side]
+  return { x: frame.x + frame.width * (1 + nx) / 2, y: frame.y + frame.height * (1 + ny) / 2, nx, ny }
+}
+
+export function nearestLinkSide(rect, point) {
+  const frame = linkFrame(rect)
+  const gaps = {
+    top: point.y - frame.y,
+    right: frame.x + frame.width - point.x,
+    bottom: frame.y + frame.height - point.y,
+    left: point.x - frame.x,
+  }
+  return Object.keys(gaps).reduce((best, side) => (Math.abs(gaps[side]) < Math.abs(gaps[best]) ? side : best))
+}
+
+// Which sides a link uses, recomputed whenever a block moves. An end is a block's box plus its side of the map
+// and its level; a bare point (the pointer while a link is dragged) has neither.
+export function linkSides(source, target) {
+  const dx = target.x + target.width / 2 - source.x - source.width / 2
+  const dy = target.y + target.height / 2 - source.y - source.height / 2
+  // One column: same level, centers or aligned edges within 40px. Both ends take the outer side and the line
+  // bows out around the blocks in between.
+  const offset = Math.min(Math.abs(dx), Math.abs(target.x - source.x), Math.abs(target.x + target.width - source.x - source.width))
+  if (offset < 40 && source.level !== undefined && source.level === target.level) {
+    const outer = source.side === 'left' ? 'left' : 'right'
+    return [outer, outer]
+  }
+  const facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'bottom' : 'top'
+  const vertical = dy > 0 ? 'bottom' : 'top'
+  // The side a block's tree branch arrives at stays with the branch whenever the link has another way out.
+  const free = (end, side, other) => (dy && side === OPPOSITE_SIDE[end.side] ? other : side)
+  return [free(source, facing, vertical), free(target, OPPOSITE_SIDE[facing], OPPOSITE_SIDE[vertical])]
+}
+
+// The curve leaves and arrives square to its sides. An arrowhead is a 7×8 chevron with its tip 2px off the frame;
+// the line stops 6px short of the tip. `ends` are where the handles of a selected link sit.
+export function linkPath(from, to, arrows = 'end') {
+  const reach = Math.min(160, Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) / 2))
+  const off = (anchor, distance) => [anchor.x + anchor.nx * distance, anchor.y + anchor.ny * distance]
+  const head = (anchor) => {
+    const [x, y] = off(anchor, 9)
+    return `M${x - anchor.ny * 4},${y + anchor.nx * 4} L${off(anchor, 2)} L${x + anchor.ny * 4},${y - anchor.nx * 4}`
+  }
+  const gaps = [arrows === 'both' ? 8 : 0, arrows === 'none' ? 0 : 8]
+  const [start, end] = [off(from, gaps[0]), off(to, gaps[1])]
+  const [c1, c2] = [off(from, reach), off(to, reach)]
+  const point = ([x, y]) => ({ x, y })
+  return {
+    d: `M${start} C${c1} ${c2} ${end}`,
+    arrows: [from, to].filter((_, index) => gaps[index]).map(head),
+    middle: { x: (start[0] + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, y: (start[1] + 3 * c1[1] + 3 * c2[1] + end[1]) / 8 },
+    ends: { from: point(off(from, gaps[0] / 2)), to: point(off(to, gaps[1] / 2)) },
+  }
 }
 
 export function insertTreeEdgeAfter(edges, edge, siblingId) {
@@ -256,12 +346,13 @@ export function reparentBranches(nodes, edges, selectedIds, targetId) {
   }
 }
 
-export function rigidRootBranch(node, dragged, edges) {
+export function rigidRootBranch(node, dragged, edges, links = []) {
   if (!node?.data?.root || dragged.length !== 1) return null
   const nodeIds = [node.id, ...descendantsOf(node.id, edges)]
   if (nodeIds.length === 1) return null
   const branch = new Set(nodeIds)
-  if (edges.some((edge) => branch.has(edge.source) !== branch.has(edge.target))) return null
+  // Links are drawn from block positions, which a rigid drag leaves untouched until it ends.
+  if (links.some((link) => branch.has(link.from) || branch.has(link.to))) return null
   return { nodeIds, edgeIds: edges.filter((edge) => branch.has(edge.source)).map((edge) => edge.id) }
 }
 
@@ -279,7 +370,6 @@ export function mergeImageNode(nodes, edges, sourceId, targetId) {
       .filter((node) => node.id !== sourceId)
       .map((node) => node.id === targetId ? { ...node, data: { ...node.data, image: source.data.image } } : node),
     edges: edges.flatMap((edge) => {
-      if (edge.data?.kind === 'link' && (edge.source === sourceId || edge.target === sourceId)) return []
       if (edge.data?.kind === 'tree' && edge.target === sourceId) return []
       if (edge.data?.kind === 'tree' && edge.source === sourceId) return [{ ...edge, source: targetId }]
       return [edge]
@@ -566,16 +656,15 @@ export function normalizeMap(input) {
       { id, ...node.data, image },
     )
   })
+  const isLink = (edge) => edge?.data?.kind === 'link'
   const edges = input.edges
-    .filter((edge) => ids.has(edge?.source) && ids.has(edge?.target) && edge.source !== edge.target)
-    .map((edge) => {
-      const normalized = makeEdge(edge.source, edge.target, edge.data?.kind, typeof edge.id === 'string' ? edge.id : undefined)
-      if (normalized.data.kind === 'link') {
-        normalized.sourceHandle = edge.sourceHandle
-        normalized.targetHandle = edge.targetHandle
-      }
-      return normalized
-    })
+    .filter((edge) => ids.has(edge?.source) && ids.has(edge?.target) && edge.source !== edge.target && !isLink(edge))
+    .map((edge) => makeEdge(edge.source, edge.target, typeof edge.id === 'string' ? edge.id : undefined))
+  // Maps saved before 9a kept links among the edges, pinned to anchor points.
+  const links = normalizeLinks([
+    ...(Array.isArray(input.links) ? input.links : []),
+    ...input.edges.filter(isLink).map((edge) => ({ id: edge.id, from: edge.source, to: edge.target })),
+  ], ids)
 
   const childIds = new Set(edges.filter((edge) => edge.data.kind === 'tree').map((edge) => edge.target))
   nodes.forEach((node) => (node.data.root = !childIds.has(node.id)))
@@ -591,6 +680,7 @@ export function normalizeMap(input) {
   }
   const freeMarks = normalizeFreeMarks(input.freeMarks)
   if (freeMarks.length) map.freeMarks = freeMarks
+  if (links.length) map.links = links
   // Positions from pre-redesign maps assume fixed-width nodes — they need a one-time re-layout.
   if (input.version !== 2 && input.version !== 3) Object.defineProperty(map, 'needsLayout', { value: true })
   return map
@@ -625,6 +715,18 @@ const escapeXml = (value) => String(value).replace(/[<>&"']/g, (char) => `&#${ch
 // Text exports carry a node's marks as bracketed words before the title: “[Done] Spotify”. Free marks are left out.
 const markPrefix = (node) => (node.data.marks ?? []).map((id) => `[${markName(id)}] `).join('')
 
+// Text exports end with the links, one per line: From → To (“label”). Long titles are cut short.
+const LINK_ARROW_TEXT = { end: '→', both: '↔', none: '—' }
+function linkLines(map) {
+  const byId = new Map(map.nodes.map((node) => [node.id, node]))
+  const title = (id) => {
+    const node = byId.get(id)
+    const symbols = [...(node?.data.label.trim().split(/\s*\n/)[0] || (node?.data.image ? '[Image]' : 'Untitled'))]
+    return symbols.length > 40 ? `${symbols.slice(0, 40).join('').trimEnd()}…` : symbols.join('')
+  }
+  return (map.links ?? []).map((link) => `${title(link.from)} ${LINK_ARROW_TEXT[link.arrows ?? 'end']} ${title(link.to)}${link.label ? ` (“${link.label}”)` : ''}`)
+}
+
 export function toOpml(map) {
   const children = new Map()
   const childIds = new Set()
@@ -645,7 +747,12 @@ export function toOpml(map) {
     const attributes = `text="${escapeXml(markPrefix(node) + (node.data.label || (node.data.image ? '[Image]' : 'Untitled')))}"${node.data.note ? ` _note="${escapeXml(node.data.note)}"` : ''}`
     return inner ? `${pad}<outline ${attributes}>\n${inner}${pad}</outline>\n` : `${pad}<outline ${attributes}/>\n`
   }
-  const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => outline(node.id, 2)).join('')
+  const lines = linkLines(map)
+  // _links marks the list so that importing the file back does not turn it into a branch.
+  const links = lines.length
+    ? `    <outline text="Links" _links="true">\n${lines.map((line) => `      <outline text="${escapeXml(line)}"/>\n`).join('')}    </outline>\n`
+    : ''
+  const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => outline(node.id, 2)).join('') + links
   return `<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0">\n  <head>\n    <title>${escapeXml(map.title)}</title>\n  </head>\n  <body>\n${body}  </body>\n</opml>\n`
 }
 
@@ -671,7 +778,10 @@ export function toMarkdown(map) {
     return `${pad}- ${label}\n${note ? `${pad}  > ${note}\n` : ''}${(children.get(id) ?? []).map((child) => item(child, depth + 1)).join('')}`
   }
   const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => item(node.id, 0)).join('')
-  return `# ${clean(map.title) || 'Untitled'}\n\n${body}`
+  const lines = linkLines(map)
+  // Fenced: the list keeps its line breaks, and importing the file back skips it.
+  const links = lines.length ? `\nLinks:\n\n\`\`\`\n${lines.join('\n')}\n\`\`\`\n` : ''
+  return `# ${clean(map.title) || 'Untitled'}\n\n${body}${links}`
 }
 
 export function plural(count, one, many) {
@@ -697,7 +807,8 @@ export function relativeTime(timestamp, now = Date.now()) {
 export function parseOpml(text) {
   const document = new DOMParser().parseFromString(text, 'text/xml')
   if (document.querySelector('parsererror')) throw new Error('Could not read the OPML file')
-  const outlines = [...(document.querySelector('body')?.children ?? [])].filter((element) => element.tagName === 'outline')
+  const outlines = [...(document.querySelector('body')?.children ?? [])]
+    .filter((element) => element.tagName === 'outline' && !element.hasAttribute('_links'))
   if (!outlines.length) throw new Error('The OPML file has no outline elements')
 
   const nodes = []
@@ -827,8 +938,8 @@ export function starterMap() {
   add(build, 'Double-click to edit', { note: 'Shift + Enter adds a second line, like this' })
 
   const organize = add(root, 'Organize', { color: COLORS[1] })
-  add(organize, 'Drag a node onto another to move it')
-  add(organize, 'Drag from a node’s edge to link ideas')
+  const move = add(organize, 'Drag a node onto another to move it')
+  const link = add(organize, 'Hold Shift and drag from a node to link ideas')
   const collapsed = add(organize, 'This branch is collapsed', { collapsed: true, note: 'Click the counter to expand it' })
   add(collapsed, 'Hidden ideas stay out of the way')
   add(collapsed, 'until you need them')
@@ -844,7 +955,7 @@ export function starterMap() {
   add(maps, 'Export to .mindmap, OPML, or Markdown')
   add(maps, 'Press ? to see every shortcut')
 
-  const map = { version: 2, title: 'Welcome to Mindspace', autoLayout: true, nodes, edges }
+  const map = { version: 2, title: 'Welcome to Mindspace', autoLayout: true, nodes, edges, links: [{ id: uid(), from: link.id, to: move.id }] }
   map.nodes = layoutNodes(map.nodes, map.edges)
   return map
 }

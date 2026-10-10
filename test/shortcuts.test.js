@@ -40,13 +40,14 @@ test('primary modifier accepts Cmd and Ctrl clicks', () => {
   assert.equal(shortcuts.hasMod?.(key({})), false)
 })
 
-test('link gesture uses the primary modifier for the current platform', () => {
-  assert.equal(shortcuts.hasLinkMod?.(key({ metaKey: true }), true), true)
-  assert.equal(shortcuts.hasLinkMod?.(key({ ctrlKey: true }), true), false)
-  assert.equal(shortcuts.hasLinkMod?.(key({ ctrlKey: true }), false), true)
-  assert.equal(shortcuts.hasLinkMod?.(key({ metaKey: true }), false), false)
-  assert.deepEqual(shortcutKeys('link', true), ['⌘', 'drag from edge'])
-  assert.deepEqual(shortcutKeys('link', false), ['Ctrl', 'drag from edge'])
+test('link gesture uses Shift on every platform', () => {
+  assert.equal(shortcuts.hasLinkMod?.(key({ shiftKey: true })), true)
+  assert.equal(shortcuts.hasLinkMod?.(key({ metaKey: true })), false)
+  assert.equal(shortcuts.hasLinkMod?.(key({ ctrlKey: true })), false)
+  assert.deepEqual(shortcutKeys('link', true), ['⇧', 'drag from block'])
+  assert.deepEqual(shortcutKeys('link', false), ['Shift', 'drag from block'])
+  assert.deepEqual(shortcutGroups(false).find((group) => group.title === 'Links').items.map((item) => [item.id, ...item.keys]),
+    [['link', 'Shift', 'drag from block'], ['linkRemove', 'Del'], ['linkCancel', 'Esc']])
 })
 
 test('help groups cover every registry entry in group order', () => {

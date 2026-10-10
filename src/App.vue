@@ -1,29 +1,36 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue'
-import { BaseEdge, ConnectionMode, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
+import { BaseEdge, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
   DEFAULT_SIZE,
   LIBRARY_STORAGE_KEY,
-  LINK_ANCHORS,
+  LINK_FRAME,
   MARKS,
   MARK_SIZE,
   MAX_LABEL_LENGTH,
+  MAX_LINK_LABEL,
   PALETTES,
   STORAGE_KEY,
   allowsAttachTarget,
   blockPreview,
   branchColor,
   branchCurveBend,
+  canLink,
   descendantsOf,
   highlightParts,
   insertTreeEdgeAfter,
   layoutVerticalGap,
   layoutNodes,
+  linkAnchor,
+  linkFrame,
   linkParts,
+  linkPath,
+  linkSides,
   makeEdge,
   makeNode,
   markName,
   mergeImageNode,
+  nearestLinkSide,
   nextMatch,
   nodeInDirection,
   normalizeLibrary,
@@ -101,6 +108,8 @@ const nodes = ref(initial.nodes)
 let pendingLayoutInitial = Boolean(initial.needsLayout)
 const edges = ref(initial.edges)
 const freeMarks = ref(initial.freeMarks ?? [])
+const links = ref(initial.links ?? [])
+const selectedLinkId = ref(null)
 const selectedMarkId = ref(null)
 const marksOpen = ref(false)
 const marksWrap = ref(null)
@@ -195,16 +204,13 @@ let helpReturnFocus = null
 let imageReturnFocus = null
 let imageLoadGeneration = 0
 let copiedTimer
-const { connectionStartHandle, dimensions, getNodes, screenToFlowCoordinate, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
+const { dimensions, getNodes, screenToFlowCoordinate, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
 const easeOut = (t) => 1 - (1 - t) ** 3
 const canvasElement = ref(null)
 const alignmentGuides = ref([])
-const linkModifierHeld = ref(false)
-const onLinkModifierKeyup = (event) => (linkModifierHeld.value = hasLinkMod(event))
-const clearLinkModifier = () => (linkModifierHeld.value = false)
 
 // A large map fits entirely into the visible area; a small one is zoomed in, but no more than 125%.
 function focusMap(duration = 300) {
@@ -289,7 +295,7 @@ const nodesById = computed(() => new Map(nodes.value.map((node) => [node.id, nod
 const parentOf = computed(() => new Map(edges.value
   .filter((edge) => edge.data?.kind === 'tree')
   .map((edge) => [edge.target, edge.source])))
-const inspectorMode = computed(() => (selectedCount.value > 1 ? 'multi' : selectedCount.value === 1 ? 'node' : 'map'))
+const inspectorMode = computed(() => (selectedCount.value > 1 ? 'multi' : selectedCount.value === 1 ? 'node' : selectedLink.value ? 'link' : 'map'))
 const primaryDescendants = computed(() => (primaryNode.value ? descendantsOf(primaryNode.value.id, edges.value).size : 0))
 const primaryLevel = computed(() => (primaryNode.value ? (depths.value.get(primaryNode.value.id) ?? 0) + 1 : 0))
 const nodePath = computed(() => {
@@ -385,13 +391,14 @@ function cleanMap() {
       id: edge.id,
       source: edge.source,
       target: edge.target,
-      type: edge.data?.kind === 'link' ? 'smoothstep' : 'default',
-      class: edge.data?.kind === 'link' ? 'relation-edge' : 'tree-edge',
+      type: 'default',
+      class: 'tree-edge',
       sourceHandle: edge.sourceHandle,
       targetHandle: edge.targetHandle,
-      data: { kind: edge.data?.kind === 'link' ? 'link' : 'tree' },
+      data: { kind: 'tree' },
     })),
     ...(freeMarks.value.length ? { freeMarks: freeMarks.value.map((mark) => ({ ...mark })) } : {}),
+    ...(links.value.length ? { links: links.value.map((link) => ({ ...link })) } : {}),
   }
 }
 
@@ -414,6 +421,7 @@ function openMap(map) {
   nodes.value = normalized.nodes
   edges.value = normalized.edges
   freeMarks.value = normalized.freeMarks ?? []
+  links.value = normalized.links ?? []
   editingId.value = null
   contextMenu.value = null
   applyVisibility()
@@ -513,7 +521,7 @@ async function addImageFile(file, center) {
 function onCopy(event) {
   if (isEditableClipboardTarget(event.target) || !selectedNodes.value.length || !event.clipboardData) return
   try {
-    const copied = serializeClipboardBranches(nodes.value, edges.value, selectedNodes.value.map((node) => node.id))
+    const copied = serializeClipboardBranches(nodes.value, edges.value, selectedNodes.value.map((node) => node.id), links.value)
     event.clipboardData.setData(MINDSPACE_CLIPBOARD_TYPE, copied.custom)
     event.clipboardData.setData('text/plain', copied.text)
     event.preventDefault()
@@ -571,6 +579,7 @@ async function onPaste(event) {
     fragment.nodes.forEach((node) => (node.selected = roots.has(node.id)))
     nodes.value.push(...fragment.nodes)
     edges.value.push(...fragment.edges)
+    links.value.push(...(fragment.links ?? []))
     orient()
     if (autoLayout.value) relayout(false, false, false, fragment.roots[0])
     else applyVisibility()
@@ -813,6 +822,7 @@ function removeSelected() {
   }
   nodes.value = nodes.value.filter((node) => !removed.has(node.id))
   edges.value = edges.value.filter((edge) => !selectedEdges.has(edge.id) && !removed.has(edge.source) && !removed.has(edge.target))
+  pruneLinks()
   pruneImageUrls()
   const childIds = new Set(edges.value.filter((edge) => edge.data?.kind === 'tree').map((edge) => edge.target))
   nodes.value.forEach((node) => (node.data.root = !childIds.has(node.id)))
@@ -1154,18 +1164,6 @@ watch(activeId, () => {
 })
 watch(inspectorOpen, placeSearch)
 
-function connectNodes(connection) {
-  if (!connection.source || !connection.target || connection.source === connection.target) return
-  const exists = edges.value.some((edge) => edge.source === connection.source && edge.target === connection.target)
-  if (exists) return
-  const before = snapshot()
-  const edge = makeEdge(connection.source, connection.target, 'link')
-  edge.sourceHandle = connection.sourceHandle
-  edge.targetHandle = connection.targetHandle
-  edges.value.push(edge)
-  record(before)
-}
-
 function onNodeDragStart({ node, nodes: dragged = [node] }) {
   if (alignmentGuides.value.length) alignmentGuides.value = []
   dragStart = snapshot()
@@ -1179,7 +1177,7 @@ function onNodeDragStart({ node, nodes: dragged = [node] }) {
   dragBranch = new Map(nodes.value
     .filter((item) => descendants.has(item.id) && !draggedIds.has(item.id))
     .map((item) => [item.id, { item, origin: { ...item.position } }]))
-  const rigid = rigidRootBranch(node, dragged, edges.value)
+  const rigid = rigidRootBranch(node, dragged, edges.value, links.value)
   if (rigid) {
     const selector = (kind, id) => `.${kind}[data-id="${CSS.escape(id)}"]`
     const elements = [
@@ -1460,6 +1458,7 @@ function onNodeDragStop(payload) {
     }
     nodes.value = merged.nodes
     edges.value = merged.edges
+    pruneLinks()
     const mergedTarget = nodes.value.find((item) => item.id === target.id)
     mergedTarget.data.collapsed = false
     selectOnly(target.id)
@@ -1521,7 +1520,7 @@ function showNodeMenu({ event, node }) {
 
 function closeOverlays() {
   contextMenu.value = null
-  selectedMarkId.value = null
+  selectedMarkId.value = selectedLinkId.value = null
   finishEditing()
 }
 
@@ -1580,6 +1579,7 @@ function onMarkGridKeydown(event) {
 function selectMark(id) {
   clearSelection()
   for (const edge of edges.value) edge.selected = false
+  selectedLinkId.value = null
   selectedMarkId.value = id
 }
 
@@ -1674,10 +1674,285 @@ function onMarkHandleDown(event, sx, sy) {
   dragFreeMark(event, selectedMark.value, (origin, dx, dy, moved) => resizeFreeMark(origin, sx, sy, dx, dy, moved.shiftKey ? 8 : 1))
 }
 
-// Picking a node lets go of the free mark, and the other way round.
+// Picking a node lets go of the free mark and of the link, and the other way round.
 watch(selectedCount, (count) => {
-  if (count) selectedMarkId.value = null
+  if (count) selectedMarkId.value = selectedLinkId.value = null
 })
+
+// Links outside the tree (9a). Like free marks they are their own list, outside layout and Vue Flow;
+// they are drawn above the tree lines and below the nodes.
+const LINK_HINT_KEY = 'mindspace:hint-link'
+const ARROW_OPTIONS = [['end', '→', 'Arrow at the end'], ['both', '↔', 'Arrows on both ends'], ['none', '—', 'No arrows']]
+const linkHover = ref(null)
+const linkDrag = ref(null)
+const linkDraft = ref(null)
+const linkHint = ref(false)
+let linkHintsLeft = 3
+try {
+  linkHintsLeft -= Number(localStorage.getItem(LINK_HINT_KEY)) || 0
+} catch {
+  // Without storage the hint shows three times per visit.
+}
+let linkHintSeen = false
+let pointerAt = null
+let cancelLinkDrag = null
+let panelLink = null
+
+const selectedLink = computed(() => links.value.find((link) => link.id === selectedLinkId.value))
+const linkGlyph = computed(() => ARROW_OPTIONS.find(([value]) => value === (selectedLink.value?.arrows ?? 'end'))[1])
+const nodeBox = (node) => ({
+  x: node.position.x,
+  y: node.position.y,
+  width: node.dimensions?.width || DEFAULT_SIZE.width,
+  height: node.dimensions?.height || DEFAULT_SIZE.height,
+})
+const linkEnd = (node) => ({ ...nodeBox(node), side: node.data.side, level: depths.value.get(node.id) })
+
+// A block hidden in a collapsed branch hands its links to the nearest visible ancestor.
+function visibleEnd(id) {
+  let node = nodesById.value.get(id)
+  while (node?.hidden) node = nodesById.value.get(parentOf.value.get(node.id))
+  return node
+}
+
+const drawnLinks = computed(() => links.value.flatMap((link) => {
+  const from = visibleEnd(link.from)
+  const to = visibleEnd(link.to)
+  if (!from || !to || from.id === to.id || linkDrag.value?.linkId === link.id) return []
+  const ends = [linkEnd(from), linkEnd(to)]
+  const sides = linkSides(...ends)
+  return [{
+    link,
+    ghost: from.id !== link.from || to.id !== link.to,
+    ...linkPath(linkAnchor(ends[0], sides[0]), linkAnchor(ends[1], sides[1]), link.arrows),
+  }]
+}))
+const selectedDrawn = computed(() => drawnLinks.value.find((item) => item.link.id === selectedLinkId.value))
+
+const linkAim = computed(() => {
+  const node = linkHover.value && nodesById.value.get(linkHover.value.id)
+  return node ? { frame: linkFrame(nodeBox(node)), dot: linkAnchor(nodeBox(node), linkHover.value.side) } : null
+})
+
+// A dragged link runs from its fixed block to the pointer, and sticks to the block under the pointer.
+const linkPreview = computed(() => {
+  const drag = linkDrag.value
+  const fixed = drag && visibleEnd(drag.fixedId)
+  if (!fixed) return null
+  const target = nodesById.value.get(drag.targetId)
+  const moving = target ? linkEnd(target) : { ...drag.point, width: 0, height: 0 }
+  const ends = drag.end === 'to' ? [linkEnd(fixed), moving] : [moving, linkEnd(fixed)]
+  const sides = linkSides(...ends)
+  const anchors = ends.map((end, index) => linkAnchor(end, sides[index], end === moving && !target ? 0 : LINK_FRAME))
+  const [origin, snap] = drag.end === 'to' ? anchors : [anchors[1], anchors[0]]
+  return { d: linkPath(...anchors, 'none').d, frame: target && linkFrame(nodeBox(target)), origin, snap: target && snap }
+})
+
+// The visible block whose link frame, grown by `reach`, is under the point; the nearest one where frames overlap.
+function linkNodeAt(point, reach) {
+  let best = null
+  let nearest = LINK_FRAME + reach
+  for (const node of nodes.value) {
+    if (node.hidden) continue
+    const distance = pointRectDistance(point, nodeBox(node))
+    if (distance > nearest) continue
+    best = node
+    nearest = distance
+  }
+  return best
+}
+
+// Shift with a free pointer over the map aims a link: the block under the pointer lights up and shows one dot,
+// on the side of its frame nearest to the pointer.
+function aimLink(shift) {
+  const point = shift && pointerAt && !linkDrag.value && !editingId.value ? screenToFlowCoordinate(pointerAt) : null
+  const node = point ? linkNodeAt(point, 5) : null
+  const side = node ? nearestLinkSide(nodeBox(node), point) : null
+  if (linkHover.value?.id !== node?.id || linkHover.value?.side !== side) linkHover.value = node ? { id: node.id, side } : null
+  if (!shift) linkHint.value = linkHintSeen = false
+  else if (node && !linkHintSeen) {
+    // The hint comes with the first three aims ever, once per press of Shift.
+    linkHintSeen = true
+    if (linkHintsLeft <= 0) return
+    linkHintsLeft -= 1
+    linkHint.value = true
+    try {
+      localStorage.setItem(LINK_HINT_KEY, String(3 - linkHintsLeft))
+    } catch {
+      // Not counted — the hint may show again.
+    }
+  }
+}
+
+function onCanvasPointerMove(event) {
+  pointerAt = !event.buttons && event.target.closest?.('.vue-flow') ? { x: event.clientX, y: event.clientY } : null
+  aimLink(hasLinkMod(event))
+}
+
+function onCanvasPointerLeave() {
+  pointerAt = null
+  aimLink(false)
+}
+
+const onLinkModifierKeyup = (event) => aimLink(hasLinkMod(event))
+const clearLinkModifier = () => aimLink(false)
+
+function onCanvasPointerDown(event) {
+  if (event.button || !hasLinkMod(event) || !linkHover.value || event.target.closest?.('.node-actions')) return
+  // Cancelled, the press starts neither a node drag nor a selection box. The click that follows a press
+  // without a drag still reaches the block, so Shift + click selects as before.
+  event.preventDefault()
+  event.stopPropagation()
+  dragLink(event, linkHover.value.id, 'to')
+}
+
+// One gesture draws a new link and re-attaches an end of the selected one: `fixedId` stays put, `end` follows the pointer.
+// Shift may be let go once the drag has started.
+function dragLink(event, fixedId, end, link = null) {
+  if (event.button) return
+  document.activeElement?.blur?.()
+  let pointer = event
+  let moved = false
+  let cancelled = false
+  let frame = 0
+  const track = () => {
+    const point = screenToFlowCoordinate({ x: pointer.clientX, y: pointer.clientY })
+    const node = linkNodeAt(point, 8)
+    const allowed = node && canLink(links.value, ...(end === 'to' ? [fixedId, node.id] : [node.id, fixedId]), link?.id)
+    linkDrag.value = { fixedId, end, linkId: link?.id, point, targetId: allowed ? node.id : null, denied: Boolean(node && !allowed) }
+  }
+  // Near an edge of the canvas the map scrolls under the pointer, as it does under a dragged node.
+  const pan = () => {
+    const bounds = canvasElement.value.getBoundingClientRect()
+    const pull = (at, size) => Math.max(-1, Math.min(1, (Math.max(0, 40 - at) - Math.max(0, at - size + 40)) / 40)) * 15
+    const dx = pull(pointer.clientX - bounds.left, bounds.width)
+    const dy = pull(pointer.clientY - bounds.top, bounds.height)
+    if (dx || dy) {
+      setViewport({ x: viewport.value.x + dx, y: viewport.value.y + dy, zoom: viewport.value.zoom })
+      track()
+    }
+    frame = requestAnimationFrame(pan)
+  }
+  const move = (at) => {
+    pointer = at
+    // A click with a little jitter draws nothing.
+    if (cancelled || (!moved && Math.hypot(at.clientX - event.clientX, at.clientY - event.clientY) < 4)) return
+    if (!moved) {
+      moved = true
+      linkHover.value = null
+      linkHint.value = false
+      frame = requestAnimationFrame(pan)
+    }
+    track()
+  }
+  const stop = (released) => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
+    cancelAnimationFrame(frame)
+    cancelLinkDrag = null
+    const targetId = linkDrag.value?.targetId
+    linkDrag.value = null
+    if (!moved) return
+    // The click that ends the gesture must not reach the canvas, where it would deselect the new link.
+    const swallow = (click) => click.stopPropagation()
+    window.addEventListener('click', swallow, { capture: true, once: true })
+    setTimeout(() => window.removeEventListener('click', swallow, true))
+    if (released.type !== 'pointerup' || !targetId) return
+    const before = snapshot()
+    if (link) link[end] = targetId
+    else {
+      links.value.push({ id: documentId(), from: fixedId, to: targetId })
+      selectLink(links.value.at(-1).id)
+    }
+    record(before)
+  }
+  // Esc drops the link at once; the listeners stay until release to swallow its click.
+  cancelLinkDrag = () => {
+    cancelled = true
+    cancelAnimationFrame(frame)
+    linkDrag.value = null
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop)
+  window.addEventListener('pointercancel', stop)
+}
+
+function selectLink(id) {
+  clearSelection()
+  for (const edge of edges.value) edge.selected = false
+  selectedMarkId.value = null
+  selectedLinkId.value = id
+}
+
+// Every change to a link is its own undo step. The default arrow and an empty label are not stored.
+function updateLink(link, patch) {
+  const before = snapshot()
+  Object.assign(link, patch)
+  if (!link.label) delete link.label
+  if (link.arrows === 'end') delete link.arrows
+  record(before)
+  contextMenu.value = null
+}
+
+function removeLink() {
+  const before = snapshot()
+  links.value = links.value.filter((link) => link.id !== selectedLinkId.value)
+  selectedLinkId.value = null
+  record(before)
+  contextMenu.value = null
+}
+
+// A link goes when either of its blocks does, in the same undo step.
+function pruneLinks() {
+  links.value = links.value.filter((link) => nodesById.value.has(link.from) && nodesById.value.has(link.to))
+}
+
+function editLinkLabel() {
+  if (linkDraft.value || !selectedDrawn.value) return
+  linkDraft.value = { id: selectedLinkId.value, text: selectedLink.value.label ?? '' }
+  nextTick(() => document.querySelector('.link-chip input')?.select())
+}
+
+function finishLinkLabel(save = true) {
+  const draft = linkDraft.value
+  linkDraft.value = null
+  const link = draft && links.value.find((item) => item.id === draft.id)
+  if (link && save) updateLink(link, { label: draft.text.trim().slice(0, MAX_LINK_LABEL) })
+}
+
+// Letting go of the link keeps the label typed so far.
+watch(selectedLinkId, () => finishLinkLabel())
+
+// The panel field writes the label as it is typed; the link is remembered because the selection may move on before the blur.
+function beginLinkPanelEdit() {
+  beginPanelEdit()
+  panelLink = selectedLink.value
+}
+
+function endLinkPanelEdit() {
+  const label = panelLink?.label?.trim()
+  if (label) panelLink.label = label
+  else if (panelLink) delete panelLink.label
+  panelLink = null
+  endPanelEdit()
+}
+
+function showLinkMenu(event, id) {
+  selectLink(id)
+  contextMenu.value = {
+    x: Math.min(event.clientX, window.innerWidth - 230),
+    y: Math.min(event.clientY, window.innerHeight - 170),
+    link: id,
+  }
+}
+
+function revealLinkEnd(id) {
+  const node = visibleEnd(id)
+  if (!node) return
+  selectOnly(node.id)
+  nextTick(() => ensureNodeVisible(node.id))
+}
 
 function persistDocuments(showState = true) {
   const current = activeDocument.value
@@ -2211,9 +2486,9 @@ function runShortcut(id, event) {
     case 'undo': return undo()
     case 'redo': return redo()
     case 'addChild': return addChild()
-    case 'addSibling': return addSibling()
+    case 'addSibling': return selectedLink.value ? editLinkLabel() : addSibling()
     case 'navigate': return navigateNodes(event.key)
-    case 'remove': return selectedMark.value ? removeFreeMark() : removeSelected()
+    case 'remove': return selectedMark.value ? removeFreeMark() : selectedLink.value ? removeLink() : removeSelected()
     case 'marks': return toggleMarks()
     case 'mark': return applyMark(MARKS.find((mark) => mark.key === event.key).id)
     case 'duplicateMark': return duplicateFreeMark()
@@ -2226,12 +2501,18 @@ function runShortcut(id, event) {
       contextMenu.value = null
       closeMenus()
       for (const node of nodes.value) node.selected = false
-      selectedMarkId.value = null
+      selectedMarkId.value = selectedLinkId.value = null
   }
 }
 
 function onKeydown(event) {
-  linkModifierHeld.value = hasLinkMod(event)
+  if (event.key === 'Escape' && linkDrag.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelLinkDrag()
+    return
+  }
+  if (!event.repeat) aimLink(hasLinkMod(event) && !isEditableClipboardTarget(event.target))
   const target = event.target
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
   if (target instanceof HTMLElement && target.isContentEditable) return
@@ -2415,13 +2696,12 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ linking: connectionStartHandle, 'link-modifier': linkModifierHeld, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @dragover.prevent @drop.prevent="onImageDrop">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ 'link-aim': linkHover, linking: linkDrag, 'link-denied': linkDrag?.denied, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @pointerdown.capture="onCanvasPointerDown" @pointermove="onCanvasPointerMove" @pointerleave="onCanvasPointerLeave" @dragover.prevent @drop.prevent="onImageDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
           class="mind-flow"
           :default-edge-options="defaultEdgeOptions"
-          :connection-mode="ConnectionMode.Loose"
           :delete-key-code="null"
           :selection-key-code="true"
           :multi-selection-key-code="MULTI_SELECT_KEY"
@@ -2435,7 +2715,6 @@ onBeforeUnmount(() => {
           :zoom-on-pinch="true"
           :zoom-on-double-click="false"
           :elevate-edges-on-select="true"
-          @connect="connectNodes"
           :node-drag-threshold="4"
           @nodes-change="onNodesChange"
           @nodes-initialized="onNodesInitialized"
@@ -2444,10 +2723,51 @@ onBeforeUnmount(() => {
           @node-drag-stop="onNodeDragStop"
           @node-double-click="({ node }) => focusEditor(node.id)"
           @node-context-menu="showNodeMenu"
-          @edge-click="selectedMarkId = null"
+          @edge-click="selectedMarkId = selectedLinkId = null"
           @pane-click="closeOverlays"
         >
           <template #zoom-pane>
+            <svg class="link-layer">
+              <rect v-if="linkAim" class="link-frame" v-bind="linkAim.frame" rx="8" />
+              <rect v-if="linkPreview?.frame" class="link-frame target" v-bind="linkPreview.frame" rx="8" />
+              <g
+                v-for="item in drawnLinks"
+                :key="item.link.id"
+                class="map-link nopan"
+                :class="{ selected: item.link.id === selectedLinkId, ghost: item.ghost }"
+                @pointerdown="selectLink(item.link.id)"
+                @contextmenu.prevent.stop="showLinkMenu($event, item.link.id)"
+              >
+                <path class="link-hit" :d="item.d" />
+                <path class="link-line" :d="item.d" />
+                <template v-if="item.link.id !== selectedLinkId">
+                  <path v-for="arrow in item.arrows" :key="arrow" class="link-arrow" :d="arrow" />
+                </template>
+              </g>
+            </svg>
+            <template v-for="item in drawnLinks" :key="item.link.id">
+              <div
+                v-if="item.link.label || item.link.id === selectedLinkId"
+                class="link-chip nopan"
+                :class="{ selected: item.link.id === selectedLinkId, empty: !item.link.label, ghost: item.ghost }"
+                :style="{ left: `${item.middle.x}px`, top: `${item.middle.y}px` }"
+                @click="item.link.id === selectedLinkId ? editLinkLabel() : selectLink(item.link.id)"
+                @contextmenu.prevent.stop="showLinkMenu($event, item.link.id)"
+              >
+                <input
+                  v-if="linkDraft?.id === item.link.id"
+                  v-model="linkDraft.text"
+                  name="link-label"
+                  aria-label="Link label"
+                  placeholder="Label"
+                  :maxlength="MAX_LINK_LABEL"
+                  @keydown.enter.prevent="finishLinkLabel()"
+                  @keydown.esc.prevent="finishLinkLabel(false)"
+                  @blur="finishLinkLabel()"
+                />
+                <template v-else>{{ item.link.label || '+ Label' }}</template>
+              </div>
+            </template>
             <div
               v-for="mark in freeMarks"
               :key="mark.id"
@@ -2486,17 +2806,6 @@ onBeforeUnmount(() => {
             >
               <Handle id="target-left" type="target" :position="Position.Left" class="node-handle target-handle" :connectable="false" />
               <Handle id="source-left" type="source" :position="Position.Left" class="node-handle source-handle" :connectable="false" />
-              <Handle
-                v-for="anchor in LINK_ANCHORS"
-                :id="anchor.id"
-                :key="anchor.id"
-                type="source"
-                :position="anchor.side"
-                class="node-handle link-handle"
-                :class="`link-handle-${anchor.side}`"
-                :style="anchor.side === 'top' ? { left: `${anchor.offset}%` } : { top: `${anchor.offset}%` }"
-                title="Drag to link to another block"
-              />
               <img
                 v-if="data.image && imageUrls.get(data.image.assetId)"
                 class="node-image"
@@ -2936,6 +3245,34 @@ onBeforeUnmount(() => {
           </g>
         </svg>
 
+        <svg v-if="linkAim || linkPreview || selectedDrawn" class="link-overlay" aria-hidden="true">
+          <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
+            <template v-if="linkPreview">
+              <path class="link-preview" :d="linkPreview.d" />
+              <template v-if="linkPreview.snap">
+                <circle class="link-halo" :cx="linkPreview.snap.x" :cy="linkPreview.snap.y" r="10" />
+                <circle class="link-dot solid" :cx="linkPreview.snap.x" :cy="linkPreview.snap.y" r="5" />
+                <circle class="link-dot solid" :cx="linkPreview.origin.x" :cy="linkPreview.origin.y" r="4" />
+              </template>
+            </template>
+            <template v-else>
+              <g
+                v-for="end in selectedDrawn ? ['from', 'to'] : []"
+                :key="end"
+                class="link-end"
+                :transform="`translate(${selectedDrawn.ends[end].x} ${selectedDrawn.ends[end].y})`"
+                @pointerdown.stop.prevent="dragLink($event, selectedDrawn.link[end === 'from' ? 'to' : 'from'], end, selectedDrawn.link)"
+              >
+                <circle r="10" />
+                <circle class="link-dot" r="4" />
+              </g>
+              <circle v-if="linkAim" :key="linkHover.side" class="link-dot aim" :cx="linkAim.dot.x" :cy="linkAim.dot.y" r="5" />
+            </template>
+          </g>
+        </svg>
+
+        <div v-if="linkHint" class="link-hint"><kbd>{{ keyLabel('Shift') }}</kbd>drag from the edge to link</div>
+
         <div class="zoom-controls">
           <button
             class="auto-layout-toggle"
@@ -2959,8 +3296,8 @@ onBeforeUnmount(() => {
       <aside v-if="inspectorOpen" class="inspector" aria-label="Properties panel">
         <header class="inspector-head">
           <div class="inspector-title">
-            <span>{{ inspectorMode === 'map' ? 'Map' : inspectorMode === 'multi' ? 'Selection' : nodePath }}</span>
-            <strong>{{ inspectorMode === 'map' ? title : inspectorMode === 'multi' ? pluralNodes(selectedCount) : primaryNode.data.label || primaryNode.data.image?.name }}</strong>
+            <span>{{ inspectorMode === 'map' ? 'Map' : inspectorMode === 'multi' ? 'Selection' : inspectorMode === 'link' ? 'Link' : nodePath }}</span>
+            <strong>{{ inspectorMode === 'map' ? title : inspectorMode === 'multi' ? pluralNodes(selectedCount) : inspectorMode === 'link' ? selectedLink.label || 'No label' : primaryNode.data.label || primaryNode.data.image?.name }}</strong>
           </div>
           <button v-if="inspectorMode === 'multi'" class="inspector-text-button" @click="clearSelection">Clear</button>
           <button v-else class="inspector-close" title="Close panel" aria-label="Close panel" @click="inspectorOpen = false">
@@ -3073,6 +3410,35 @@ onBeforeUnmount(() => {
             </section>
           </template>
 
+          <template v-else-if="inspectorMode === 'link'">
+            <section class="panel-section">
+              <h3>Link</h3>
+              <div class="link-route">
+                <button title="Show this block" @click="revealLinkEnd(selectedLink.from)">{{ nodeLabel(nodesById.get(selectedLink.from)) }}</button>
+                <span aria-hidden="true">{{ linkGlyph }}</span>
+                <button title="Show this block" @click="revealLinkEnd(selectedLink.to)">{{ nodeLabel(nodesById.get(selectedLink.to)) }}</button>
+              </div>
+              <input
+                class="panel-input note-input"
+                :value="selectedLink.label ?? ''"
+                name="panel-link-label"
+                aria-label="Link label"
+                placeholder="Label"
+                :maxlength="MAX_LINK_LABEL"
+                @focus="beginLinkPanelEdit"
+                @input="selectedLink.label = $event.target.value"
+                @blur="endLinkPanelEdit"
+                @keydown="onPanelKeydown"
+              />
+              <div class="segmented" role="radiogroup" aria-label="Arrows">
+                <button v-for="[value, glyph, name] in ARROW_OPTIONS" :key="value" role="radio" :aria-checked="(selectedLink.arrows ?? 'end') === value" :aria-label="name" :title="name" :class="{ active: (selectedLink.arrows ?? 'end') === value }" @click="updateLink(selectedLink, { arrows: value })">{{ glyph }}</button>
+              </div>
+            </section>
+            <section class="panel-actions">
+              <button class="danger" @click="removeLink"><span>Delete link</span><kbd>{{ keysLabel('remove') }}</kbd></button>
+            </section>
+          </template>
+
           <template v-else>
             <section class="panel-section">
               <h3>Layout</h3>
@@ -3115,7 +3481,14 @@ onBeforeUnmount(() => {
         <footer v-else-if="inspectorMode === 'map'" class="inspector-foot">{{ plural(topicCount, 'topic', 'topics') }} · {{ pluralNodes(nodes.length) }}</footer>
       </aside>
 
-      <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }">
+      <div v-if="contextMenu?.link && selectedLink" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }">
+        <button :disabled="!canLink(links, selectedLink.to, selectedLink.from)" @click="updateLink(selectedLink, { from: selectedLink.to, to: selectedLink.from })"><span>⇄</span>Reverse</button>
+        <button @click="updateLink(selectedLink, { arrows: selectedLink.arrows === 'none' ? 'end' : 'none' })"><span>{{ selectedLink.arrows === 'none' ? '✓' : '' }}</span>No arrow</button>
+        <button @click="updateLink(selectedLink, { arrows: selectedLink.arrows === 'both' ? 'end' : 'both' })"><span>{{ selectedLink.arrows === 'both' ? '✓' : '' }}</span>Arrows on both ends</button>
+        <hr />
+        <button class="danger" @click="removeLink"><span>⌫</span>Delete link <kbd>{{ keysLabel('remove') }}</kbd></button>
+      </div>
+      <div v-else-if="contextMenu && !contextMenu.link" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }">
         <template v-if="contextMenu.mark">
           <button @click="removeNodeMark(contextMenu.id, contextMenu.mark)"><span>✕</span>Remove “{{ markName(contextMenu.mark) }}”</button>
           <hr />

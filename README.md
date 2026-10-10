@@ -27,7 +27,8 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 - **Two-line nodes.** A title plus a quiet secondary line for prices, dates, or notes. Numbers line up.
 - **Search across the map.** `⌘F` highlights matches, dims everything else, and pans to each result, even inside collapsed branches.
 - **Many maps, one place.** Switch, rename, duplicate, and delete maps from a single menu, with undo for deletions.
-- **Drag to rearrange.** Drop a node or a whole branch onto another node to reattach it, or draw free links between any two nodes.
+- **Drag to rearrange.** Drop a node or a whole branch onto another node to reattach it.
+- **Links across branches.** Hold `Shift` and drag from one node to another to connect ideas outside the tree. A link is a neutral dashed arrow that follows its nodes; it can carry a label, point both ways, or have no arrow.
 - **Copy and paste.** Copy complete branches between maps, paste outlines from XMind, Miro, MindNode, or Coggle, or paste plain text as one independent root block.
 - **Images.** Paste or drop PNG, JPEG, WebP, or GIF files up to 10 MB onto the canvas, as a block of their own or inside a node.
 - **Auto layout.** Branches to the right, on both sides, or as a tree, with smooth or straight lines and adjustable spacing. Turn it off to place nodes by hand.
@@ -52,6 +53,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 | Paste on canvas | `⌘` `V` |
 | Move between nodes | `←` `↑` `→` `↓` |
 | Collapse / expand branch | `⌥` `←` / `⌥` `→` |
+| Link two nodes | `⇧` drag from a node |
 | Icon set / add or remove an icon | `I` / `1`–`0` |
 | Search | `⌘` `F` |
 | Pan / zoom | `Space` drag / `⌘` wheel |

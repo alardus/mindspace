@@ -30,7 +30,7 @@ test('serializes complete selected branches without overlap', () => {
   const leaf = makeNode('Leaf', { x: 400, y: 0 }, { id: 'leaf' })
   const result = serializeClipboardBranches(
     [root, child, leaf],
-    [makeEdge('root', 'child', 'tree', 'root-child'), makeEdge('child', 'leaf', 'tree', 'child-leaf')],
+    [makeEdge('root', 'child', 'root-child'), makeEdge('child', 'leaf', 'child-leaf')],
     ['root', 'child'],
   )
   const payload = JSON.parse(result.custom)
@@ -53,15 +53,16 @@ test('keeps only internal edges and preserves node data', () => {
   const result = serializeClipboardBranches(
     [root, child, outside],
     [
-      makeEdge('root', 'child', 'tree', 'tree'),
-      makeEdge('root', 'child', 'link', 'link'),
-      makeEdge('child', 'outside', 'link', 'crossing'),
+      makeEdge('root', 'child', 'tree'),
     ],
     ['root'],
+    [{ id: 'link', from: 'child', to: 'root', label: 'back' }, { id: 'crossing', from: 'child', to: 'outside' }],
   )
   const payload = JSON.parse(result.custom)
 
-  assert.deepEqual(payload.edges.map((edge) => edge.id), ['tree', 'link'])
+  assert.deepEqual(payload.edges, [{ id: 'tree', source: 'root', target: 'child', data: { kind: 'tree' } }])
+  // A link is copied only when both of its blocks are.
+  assert.deepEqual(payload.links, [{ id: 'link', from: 'child', to: 'root', label: 'back' }])
   assert.deepEqual(payload.nodes[0], {
     id: 'root',
     type: 'mind',
@@ -77,9 +78,10 @@ test('remaps every node and edge id on parse', () => {
   const root = makeNode('Root', { x: 10, y: 20 }, { id: 'root', root: true })
   const child = makeNode('Child', { x: 210, y: 20 }, { id: 'child' })
   const serialized = serializeClipboardBranches([root, child], [
-    makeEdge('root', 'child', 'tree', 'tree'),
-    makeEdge('root', 'child', 'link', 'link'),
-  ], ['root'])
+    makeEdge('root', 'child', 'tree'),
+    // Copied by a version that kept links among the edges: dropped, never pasted as a branch.
+    { id: 'old', source: 'child', target: 'root', data: { kind: 'link' } },
+  ], ['root'], [{ id: 'link', from: 'child', to: 'root', arrows: 'none' }])
 
   const fragment = parseMindspaceClipboard(serialized.custom, ids())
 
@@ -87,8 +89,8 @@ test('remaps every node and edge id on parse', () => {
   assert.deepEqual(fragment.nodes.map((node) => node.id), ['new-1', 'new-2'])
   assert.deepEqual(fragment.edges.map((edge) => [edge.id, edge.source, edge.target, edge.data.kind]), [
     ['new-3', 'new-1', 'new-2', 'tree'],
-    ['new-4', 'new-1', 'new-2', 'link'],
   ])
+  assert.deepEqual(fragment.links, [{ id: 'new-4', from: 'new-2', to: 'new-1', arrows: 'none' }])
   assert.equal(fragment.source, 'mindspace')
 })
 
@@ -138,7 +140,7 @@ test('translates fragment bounds around a requested center', () => {
       makeNode('Root', { x: 0, y: 0 }, { id: 'root', root: true }),
       makeNode('Child', { x: 300, y: 100 }, { id: 'child' }),
     ],
-    edges: [makeEdge('root', 'child', 'tree', 'edge')],
+    edges: [makeEdge('root', 'child', 'edge')],
   }
 
   const translated = translateClipboardFragment(fragment, { x: 500, y: 500 })
@@ -289,7 +291,7 @@ test('fits an imported group without changing relative positions', () => {
       makeNode('Root', { x: 10, y: 20 }, { id: 'root', root: true }),
       makeNode('Child', { x: 310, y: 120 }, { id: 'child' }),
     ],
-    edges: [makeEdge('root', 'child', 'tree', 'edge')],
+    edges: [makeEdge('root', 'child', 'edge')],
   }
 
   const translated = translateClipboardFragment(fragment, { x: 800, y: 450 })

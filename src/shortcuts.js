@@ -23,10 +23,11 @@ export function keyLabel(key, mac = IS_MAC) {
 }
 
 export const hasMod = (event) => event.metaKey || event.ctrlKey
-export const hasLinkMod = (event, mac = IS_MAC) => mac ? event.metaKey : event.ctrlKey
+// Shift over a block aims a link; Shift + click still adds the block to the selection.
+export const hasLinkMod = (event) => event.shiftKey
 const letter = (event) => event.key.toLowerCase()
 
-export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Icons', 'Maps', 'General']
+export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Links', 'Icons', 'Maps', 'General']
 
 export const SHORTCUTS = [
   { id: 'addChild', group: 'Nodes', label: 'Child node', keys: ['Tab'], match: (event) => event.key === 'Tab' && !event.shiftKey },
@@ -45,7 +46,6 @@ export const SHORTCUTS = [
   { id: 'paste', group: 'Nodes', label: 'Paste on canvas', keys: ['Mod', 'V'] },
   // { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
   { id: 'remove', group: 'Nodes', label: 'Delete node', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
-  { id: 'link', group: 'Nodes', label: 'Link nodes', keys: ['Mod', 'drag from edge'] },
   { id: 'noteLine', group: 'Editing', label: 'Description field', keys: ['Tab'], bindings: [['Tab'], ['Shift', 'Enter']] },
   { id: 'finishEdit', group: 'Editing', label: 'Finish editing', keys: ['Enter'] },
   { id: 'cancelEdit', group: 'Editing', label: 'Cancel editing', keys: ['Esc'] },
@@ -57,6 +57,9 @@ export const SHORTCUTS = [
   { id: 'collapse', group: 'Branches', label: 'Collapse', keys: ['Alt', '←'], match: (event) => event.altKey && event.key === 'ArrowLeft' },
   { id: 'expand', group: 'Branches', label: 'Expand', keys: ['Alt', '→'], match: (event) => event.altKey && event.key === 'ArrowRight' },
   { id: 'multiSelect', group: 'Branches', label: 'Select multiple', keys: [MULTI_SELECT_KEY, 'click'] },
+  { id: 'link', group: 'Links', label: 'Link two blocks', keys: ['Shift', 'drag from block'] },
+  { id: 'linkRemove', group: 'Links', label: 'Delete selected link', keys: ['Delete'] },
+  { id: 'linkCancel', group: 'Links', label: 'Cancel a new link', keys: ['Esc'] },
   // Bare keys: they give way to typing, so Shift+I still starts a title with a capital I.
   { id: 'marks', group: 'Icons', label: 'Open or close the icon set', keys: ['I'], match: (event) => !hasMod(event) && !event.altKey && !event.shiftKey && letter(event) === 'i' },
   { id: 'mark', group: 'Icons', label: 'Add or remove an icon', keys: ['1–0'], match: (event) => !hasMod(event) && !event.altKey && /^\d$/.test(event.key) },

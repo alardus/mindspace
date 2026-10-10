@@ -103,11 +103,10 @@ test('merge image node into text while preserving its children', () => {
   const unrelated = makeNode('Unrelated', {}, { id: 'unrelated' })
   const nodes = [parent, source, target, first, second, unrelated]
   const edges = [
-    makeEdge('parent', 'source', 'tree', 'incoming'),
-    makeEdge('source', 'first', 'tree', 'first-edge'),
-    makeEdge('source', 'second', 'tree', 'second-edge'),
-    makeEdge('source', 'unrelated', 'link', 'free-link'),
-    makeEdge('parent', 'unrelated', 'tree', 'unrelated-edge'),
+    makeEdge('parent', 'source', 'incoming'),
+    makeEdge('source', 'first', 'first-edge'),
+    makeEdge('source', 'second', 'second-edge'),
+    makeEdge('parent', 'unrelated', 'unrelated-edge'),
   ]
 
   const result = mapModel.mergeImageNode?.(nodes, edges, 'source', 'target') ?? { error: 'missing' }
@@ -121,7 +120,7 @@ test('merge image node into text while preserving its children', () => {
     ['unrelated-edge', 'parent', 'unrelated'],
   ])
   assert.equal(nodes.length, 6)
-  assert.equal(edges.length, 5)
+  assert.equal(edges.length, 4)
 })
 
 test('merge image rejects occupied, cyclic and invalid sources', () => {
@@ -167,14 +166,17 @@ test('a self-contained root branch can move as one visual group', () => {
   const child = makeNode('child', {}, { id: 'child' })
   const leaf = makeNode('leaf', {}, { id: 'leaf' })
   const other = makeNode('other', {}, { id: 'other', root: true })
-  const edges = [makeEdge('root', 'child', 'tree', 'root-child'), makeEdge('child', 'leaf', 'tree', 'child-leaf')]
+  const edges = [makeEdge('root', 'child', 'root-child'), makeEdge('child', 'leaf', 'child-leaf')]
 
   assert.deepEqual(mapModel.rigidRootBranch?.(root, [root], edges), {
     nodeIds: ['root', 'child', 'leaf'],
     edgeIds: ['root-child', 'child-leaf'],
   })
   assert.equal(mapModel.rigidRootBranch?.(child, [child], edges), null)
-  assert.equal(mapModel.rigidRootBranch?.(root, [root], [...edges, makeEdge('leaf', other.id, 'link')]), null)
+  // A link is drawn from block positions, which a rigid drag does not touch — even a link inside the branch.
+  assert.equal(mapModel.rigidRootBranch?.(root, [root], edges, [{ from: 'leaf', to: other.id }]), null)
+  assert.equal(mapModel.rigidRootBranch?.(root, [root], edges, [{ from: 'child', to: 'leaf' }]), null)
+  assert.notEqual(mapModel.rigidRootBranch?.(root, [root], edges, [{ from: other.id, to: 'elsewhere' }]), null)
 })
 
 test('reparents every top-level selected branch without flattening selected descendants', () => {
@@ -186,9 +188,9 @@ test('reparents every top-level selected branch without flattening selected desc
   const secondChild = makeNode('second child', {}, { id: 'second-child' })
   const nodes = [target, first, firstChild, oldParent, second, secondChild]
   const edges = [
-    makeEdge('first', 'first-child', 'tree', 'first-child-edge'),
-    makeEdge('old-parent', 'second', 'tree', 'old-second-edge'),
-    makeEdge('second', 'second-child', 'tree', 'second-child-edge'),
+    makeEdge('first', 'first-child', 'first-child-edge'),
+    makeEdge('old-parent', 'second', 'old-second-edge'),
+    makeEdge('second', 'second-child', 'second-child-edge'),
   ]
 
   const result = mapModel.reparentBranches?.(nodes, edges, ['first', 'first-child', 'second'], 'target')
@@ -226,10 +228,10 @@ test('arrow navigation follows visible node positions', () => {
 
 test('a sibling edge is inserted immediately after the current sibling', () => {
   const edges = [
-    makeEdge('root', 'first', 'tree', 'edge-first'),
-    makeEdge('root', 'last', 'tree', 'edge-last'),
+    makeEdge('root', 'first', 'edge-first'),
+    makeEdge('root', 'last', 'edge-last'),
   ]
-  insertTreeEdgeAfter(edges, makeEdge('root', 'middle', 'tree', 'edge-middle'), 'first')
+  insertTreeEdgeAfter(edges, makeEdge('root', 'middle', 'edge-middle'), 'first')
 
   assert.deepEqual(edges.map((edge) => edge.target), ['first', 'middle', 'last'])
   const nodes = ['root', 'first', 'middle', 'last']
@@ -333,7 +335,8 @@ test('maps export to OPML as nested outlines', () => {
       { id: 'child', data: { label: 'Child' } },
       { id: 'other', data: { label: 'Other' } },
     ],
-    edges: [makeEdge('root', 'child'), makeEdge('child', 'other', 'link')],
+    edges: [makeEdge('root', 'child')],
+    links: [{ from: 'child', to: 'other', label: 'see <also>' }],
   })
   map.nodes[1].data.note = '7.90 € / мес'
   const opml = toOpml(map)
@@ -341,6 +344,7 @@ test('maps export to OPML as nested outlines', () => {
   assert.match(opml, /<title>A &#38; B<\/title>/)
   assert.match(opml, /<outline text="Root &#60;1&#62;">\n\s+<outline text="Child"[^>]*\/>\n\s+<\/outline>/)
   assert.match(opml, /<outline text="Other"\/>/)
+  assert.match(opml, /<outline text="Links" _links="true">\n\s+<outline text="Child → Other \(“see &#60;also&#62;”\)"\/>\n\s+<\/outline>\n\s+<\/body>/)
 })
 
 test('Markdown headings and indented lists become branches', () => {
@@ -386,7 +390,8 @@ test('maps export to Markdown without image data', () => {
       { id: 'image', data: { label: '', image } },
       { id: 'other', data: { label: 'Other' } },
     ],
-    edges: [makeEdge('root', 'image'), makeEdge('image', 'other', 'link')],
+    edges: [makeEdge('root', 'image')],
+    links: [{ from: 'image', to: 'other', arrows: 'both' }, { from: 'other', to: 'root', label: 'blocks' }],
   })
 
   assert.equal(toMarkdown(map), `# A & B
@@ -395,7 +400,16 @@ test('maps export to Markdown without image data', () => {
   > Q4
   - [Image]
 - Other
+
+Links:
+
+\`\`\`
+[Image] ↔ Other
+Other → Project (“blocks”)
+\`\`\`
 `)
+  // The fenced list is skipped on the way back in.
+  assert.deepEqual(parseMarkdown(toMarkdown(map)).nodes.map((node) => node.data.label), ['Project', '[Image]', 'Other'])
 })
 
 test('Markdown round-trip preserves notes that look like structure', () => {
@@ -697,4 +711,92 @@ test('marks survive a save and load, unknown ones are skipped, and text exports 
   assert.match(toMarkdown(map), /^- Music\n  - \[Done\] \[Idea\] Spotify$/m)
   assert.match(toOpml(map), /<outline text="\[Done\] \[Idea\] Spotify"\/>/)
   assert.doesNotMatch(toMarkdown(map), /Favorite/)
+})
+
+test('links are their own list: old link edges convert, bad and repeated ones drop', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: ['a', 'b', 'c'].map((id) => ({ id, data: { label: id } })),
+    edges: [
+      makeEdge('a', 'b'),
+      // Saved before links left the edges: pinned to anchor points that no longer exist.
+      { id: 'old', source: 'b', target: 'c', sourceHandle: 'link-left-2', targetHandle: 'link-top-3', data: { kind: 'link' } },
+    ],
+    links: [
+      { id: 'l1', from: 'a', to: 'c', label: '  uses  ', arrows: 'both' },
+      { id: 'l1', from: 'c', to: 'a', arrows: 'sideways' },
+      { from: 'a', to: 'c' },
+      { from: 'a', to: 'a' },
+      { from: 'a', to: 'gone' },
+    ],
+  })
+
+  assert.deepEqual(map.edges.map((edge) => [edge.source, edge.target, edge.data.kind]), [['a', 'b', 'tree']])
+  assert.deepEqual(map.links.map(({ id, ...link }) => link), [
+    { from: 'a', to: 'c', label: 'uses', arrows: 'both' },
+    { from: 'c', to: 'a' },
+    { from: 'b', to: 'c' },
+  ])
+  assert.equal(new Set(map.links.map((link) => link.id)).size, 3)
+  assert.deepEqual(normalizeMap(JSON.parse(JSON.stringify(map))).links, map.links)
+  assert.equal('links' in normalizeMap({ nodes: [{ id: 'a', data: { label: 'a' } }], edges: [] }), false)
+
+  assert.equal(mapModel.canLink(map.links, 'a', 'b'), true)
+  assert.equal(mapModel.canLink(map.links, 'a', 'a'), false)
+  assert.equal(mapModel.canLink(map.links, 'a', 'c'), false)
+  // Re-attaching a link to where it already is changes nothing but is allowed.
+  assert.equal(mapModel.canLink(map.links, 'a', 'c', 'l1'), true)
+})
+
+test('link sides follow the blocks', () => {
+  const { linkSides } = mapModel
+  const box = (x, y, more = {}) => ({ x, y, width: 100, height: 30, side: 'right', level: 2, ...more })
+
+  // Facing sides: sideways when the blocks are further apart across than down.
+  assert.deepEqual(linkSides(box(0, 0, { side: 'root' }), box(400, 50, { side: 'root' })), ['right', 'left'])
+  assert.deepEqual(linkSides(box(400, 50, { side: 'root' }), box(0, 0, { side: 'root' })), ['left', 'right'])
+  assert.deepEqual(linkSides(box(0, 0, { level: 1 }), box(80, 300)), ['bottom', 'top'])
+  assert.deepEqual(linkSides(box(80, 300), box(0, 0, { level: 1 })), ['top', 'bottom'])
+  // The side the tree branch arrives at stays free while the link has another way out.
+  assert.deepEqual(linkSides(box(0, 0, { level: 1 }), box(400, 50)), ['right', 'top'])
+  assert.deepEqual(linkSides(box(0, 50, { level: 1 }), box(400, 0)), ['right', 'bottom'])
+  assert.deepEqual(linkSides(box(400, 50), box(0, 0, { side: 'root', level: 0 })), ['top', 'right'])
+  assert.deepEqual(linkSides(box(0, 0, { level: 1 }), box(400, 0)), ['right', 'left'])
+  // Neighbours in one column bow out on the outer side, whatever their widths.
+  assert.deepEqual(linkSides(box(0, 100), box(0, 0, { width: 240 })), ['right', 'right'])
+  assert.deepEqual(linkSides(box(0, 0, { side: 'left' }), box(-60, 100, { side: 'left', width: 160 })), ['left', 'left'])
+  assert.deepEqual(linkSides(box(0, 0), box(0, 100, { level: 3 })), ['bottom', 'top'])
+  // The pointer of a link being dragged is a bare point.
+  assert.deepEqual(linkSides(box(0, 0), { x: 300, y: 20, width: 0, height: 0 }), ['right', 'left'])
+})
+
+test('a link is a curve square to its sides, with the arrowhead off the frame', () => {
+  const { linkAnchor, linkFrame, linkPath, nearestLinkSide } = mapModel
+  // Mockup 9a: two 230×48 blocks in one column.
+  const source = { x: 34, y: 144, width: 230, height: 48 }
+  const target = { x: 34, y: 20, width: 230, height: 48 }
+
+  assert.deepEqual(linkFrame(source), { x: 28, y: 138, width: 242, height: 60 })
+  assert.deepEqual(['top', 'right', 'bottom', 'left'].map((side) => linkAnchor(source, side)).map(({ x, y }) => [x, y]),
+    [[149, 138], [270, 168], [149, 198], [28, 168]])
+  assert.equal(nearestLinkSide(source, { x: 260, y: 170 }), 'right')
+  assert.equal(nearestLinkSide(source, { x: 150, y: 150 }), 'top')
+  assert.equal(nearestLinkSide(source, { x: 150, y: 200 }), 'bottom')
+  assert.equal(nearestLinkSide(source, { x: 30, y: 168 }), 'left')
+
+  const path = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'))
+  assert.equal(path.d, 'M270,168 C332,168 332,44 278,44')
+  assert.deepEqual(path.arrows, ['M279,48 L272,44 L279,40'])
+  assert.deepEqual(path.middle, { x: 317.5, y: 106 })
+  assert.deepEqual(path.ends, { from: { x: 270, y: 168 }, to: { x: 274, y: 44 } })
+
+  const both = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'both')
+  assert.equal(both.d, 'M278,168 C332,168 332,44 278,44')
+  assert.equal(both.arrows.length, 2)
+  const none = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'none')
+  assert.equal(none.d, 'M270,168 C332,168 332,44 270,44')
+  assert.deepEqual(none.arrows, [])
+  // The reach of the control points is half the distance, kept between 40 and 160.
+  assert.match(linkPath({ x: 0, y: 0, nx: 1, ny: 0 }, { x: 20, y: 0, nx: -1, ny: 0 }, 'none').d, /C40,0 -20,0/)
+  assert.match(linkPath({ x: 0, y: 0, nx: 0, ny: 1 }, { x: 0, y: 900, nx: 0, ny: -1 }, 'none').d, /C0,160 0,740/)
 })

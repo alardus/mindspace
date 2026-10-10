@@ -36,7 +36,8 @@
   --focus: #1F2421;
   --node-hover: color-mix(in oklab, var(--ink) 4%, var(--canvas));
   --edge: #9A9F96;
-  --relation: #B68B72;
+  --link: #8A8E86;
+  --link-halo: rgba(31, 36, 33, .12);
   --guide: #D6537D;
   --brand: #E9A23B;
   --lightbox: #1F2421;
@@ -103,7 +104,8 @@
   --focus: #ECEBE6;
   --node-hover: color-mix(in oklab, var(--ink) 5%, var(--canvas));
   --edge: #6E726A;
-  --relation: #C9A08A;
+  --link: #8D9088;
+  --link-halo: rgba(236, 235, 230, .14);
   --lightbox: #0E100E;
   --mark: color-mix(in oklab, var(--mark-current) 28%, var(--canvas));
   --mark-current-text: #161816;
@@ -300,8 +302,8 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 
 .workspace { position: relative; height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
 /* The canvas runs under the panel; right-side controls shift by the panel width plus its margins. */
-.top-right, .zoom-controls { transition: right .2s ease; }
-.workspace.inspector-open .top-right, .workspace.inspector-open .zoom-controls { right: 344px; }
+.top-right, .zoom-controls, .link-hint { transition: right .2s ease; }
+.workspace.inspector-open .top-right, .workspace.inspector-open .zoom-controls, .workspace.inspector-open .link-hint { right: 344px; }
 /* Notifications center on the visible part of the canvas, not under the panel. */
 .toast { transition: left .2s ease; }
 .workspace.inspector-open .toast, .workspace.inspector-open .search-island { left: calc((100% - 344px) / 2); }
@@ -399,7 +401,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .mind-node.selected, .mind-node.editing, .mind-node.drop-target { background: var(--branch-fill); }
 .mind-node.editing { box-shadow: 0 0 0 1.5px var(--branch-ring); }
 .mind-node.merge-target { box-shadow: 0 0 0 4px var(--branch-ring); }
-.drag-preview { position: absolute; inset: 0; z-index: 5; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.drag-preview, .link-overlay { position: absolute; inset: 0; z-index: 5; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .drag-preview line { stroke: var(--guide); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .drag-preview path { fill: none; stroke-width: 2; stroke-linecap: round; }
 .node-title { font-size: 15px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
@@ -483,16 +485,45 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .mind-node .tree-handle { top: auto; right: auto; bottom: -1px; left: 10px; transform: none; opacity: 0; pointer-events: none; }
 .mind-node.root .tree-handle { left: 20px; }
 .target-handle, .source-handle { pointer-events: none; }
-.mind-node .link-handle { width: 7px; height: 7px; cursor: crosshair; opacity: 0; pointer-events: none; }
-.link-handle::before { content: ''; position: absolute; inset: -3px; border-radius: 50%; }
-.mind-node.style-line:not(.root) .link-handle-left, .mind-node.style-line:not(.root) .link-handle-right { bottom: auto; transform: translateY(-50%); }
-.canvas-wrap.link-modifier .mind-node:hover .link-handle, .canvas-wrap.linking .link-handle { opacity: 1; pointer-events: all; }
-.mind-node .link-handle:hover { background: var(--branch); }
 
 .vue-flow__edge-path { stroke: var(--edge); stroke-width: 2; stroke-linecap: round; }
-.mind-flow:has(.mind-node:hover) .vue-flow__edge-interaction, .canvas-wrap.linking .vue-flow__edge-interaction { pointer-events: none; }
-.vue-flow__edge.relation-edge .vue-flow__edge-path { stroke: var(--relation); stroke-dasharray: 5 5; }
+.mind-flow:has(.mind-node:hover) .vue-flow__edge-interaction { pointer-events: none; }
 .vue-flow__edge.selected .vue-flow__edge-path { filter: brightness(.8); stroke-width: 3; }
+
+/* Links outside the tree (9a): a neutral dashed curve with an arrowhead, never in a branch color. The layer sits in map
+   coordinates above the tree lines and below the nodes, like free marks; the overlay holds what must stay above the nodes. */
+.link-layer { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.map-link path, .link-preview { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.link-line, .link-arrow { stroke: var(--link); stroke-width: 1.5; }
+.link-line { stroke-dasharray: 5 4; }
+.link-hit { stroke: transparent; stroke-width: 20; cursor: pointer; pointer-events: stroke; }
+.map-link:hover .link-line, .map-link:hover .link-arrow, .map-link.selected .link-line { stroke: var(--ink); }
+.map-link.selected .link-line { stroke-width: 2; }
+.map-link.ghost, .link-chip.ghost { opacity: .5; }
+.link-frame { fill: var(--node-hover); }
+.link-frame.target { fill: color-mix(in oklab, var(--ink) 3%, transparent); stroke: var(--ink); stroke-width: 1.5; }
+.link-preview { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.link-dot { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; }
+.link-dot.solid { fill: var(--ink); stroke: var(--surface); }
+.link-dot.aim { animation: link-dot .08s ease-out; }
+@keyframes link-dot { from { opacity: 0; } }
+.link-halo { fill: var(--link-halo); }
+/* The handle of a selected link's end: a wider invisible circle makes the 8px dot easy to grab. */
+.link-end { cursor: grab; pointer-events: all; touch-action: none; }
+.link-end circle:first-child { fill: transparent; }
+.link-chip { position: absolute; height: 24px; max-width: 240px; padding: 0 9px; overflow: hidden; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; font-size: 12px; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; pointer-events: all; user-select: none; transform: translate(-50%, -50%); }
+.link-chip.selected { border-color: var(--ink); }
+.link-chip.empty { color: var(--muted); }
+.link-chip input { display: block; field-sizing: content; min-width: 40px; max-width: 220px; height: 22px; padding: 0; color: var(--ink); background: transparent; border: 0; outline: none; font: inherit; }
+.link-chip input::placeholder { color: var(--muted-2); }
+.link-hint { position: absolute; right: 12px; bottom: 58px; z-index: 20; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; color: var(--toast-text); background: var(--toast-bg); border-radius: 7px; font-size: 12px; white-space: nowrap; pointer-events: none; }
+.link-hint kbd { padding: 0 5px; border: 1px solid color-mix(in oklab, var(--toast-text) 35%, transparent); border-radius: 4px; font: inherit; line-height: 16px; }
+.canvas-wrap.link-aim .vue-flow__node, .canvas-wrap.linking, .canvas-wrap.linking * { cursor: crosshair !important; }
+.canvas-wrap.link-denied, .canvas-wrap.link-denied * { cursor: not-allowed !important; }
+.link-route { display: flex; align-items: center; gap: 8px; }
+.link-route button { flex: 1 1 0; min-width: 0; height: 32px; padding: 0 10px; overflow: hidden; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.link-route button:hover { background: var(--hover); border-color: var(--border-strong); }
+.link-route span { flex: none; color: var(--muted); }
 
 .zoom-controls { position: absolute; right: 12px; bottom: 12px; display: flex; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow-island); overflow: hidden; }
 .zoom-controls button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; background: transparent; border: 0; border-right: 1px solid var(--divider); cursor: pointer; font-size: 18px; }
@@ -537,5 +568,5 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .node-note mark { color: var(--ink); }
 .mind-node.search-current mark { color: var(--mark-current-text); background: var(--mark-current); }
 .mind-node.search-current { background: var(--match-bg) !important; }
-.mind-node, .branch-edge, .vue-flow__edge.relation-edge { transition: opacity .15s, background .15s; }
-.canvas-wrap.searching .mind-node:not(.search-match), .canvas-wrap.searching .branch-edge:not(.search-path), .canvas-wrap.searching .vue-flow__edge.relation-edge { opacity: var(--dim-opacity); }
+.mind-node, .branch-edge, .map-link, .link-chip { transition: opacity .15s, background .15s; }
+.canvas-wrap.searching .mind-node:not(.search-match), .canvas-wrap.searching .branch-edge:not(.search-path), .canvas-wrap.searching .map-link, .canvas-wrap.searching .link-chip { opacity: var(--dim-opacity); }
