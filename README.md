@@ -33,6 +33,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 - **Images.** Paste or drop PNG, JPEG, WebP, or GIF files up to 10 MB onto the canvas, as a block of their own or inside a node.
 - **Auto layout.** Branches to the right, on both sides, or as a tree, with smooth or straight lines and adjustable spacing. Turn it off to place nodes by hand.
 - **Icon marks.** Ten fixed icons (Important, Question, Done, Idea, and more) to put on a node with `1`–`0`, or to drop on the canvas as a free mark you can move and resize.
+- **Canvas text.** Double-click empty canvas space to add a movable text block; resize it from any corner to scale the frame and type together.
 - **Branch palettes.** Bright, Calm, or Mono, plus per-branch colors inherited by children.
 - **Light and dark themes.** Follows your system or set manually; branch colors adapt to each theme.
 - **Import and export.** `.mindmap` files for backups (images included), plus OPML and Markdown outlines.

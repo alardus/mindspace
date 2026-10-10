@@ -683,6 +683,48 @@ test('free mark resize keeps the opposite corner, the 16–128 range and the Shi
   assert.equal(resizeFreeMark(mark, 1, 1, 7.4, 7.4, 8).size, 48)
 })
 
+test('free text resize scales its frame and font while keeping the opposite corner still', () => {
+  const resizeFreeText = mapModel.resizeFreeText ?? (() => ({ size: 0 }))
+  const text = { id: 't', text: 'Text', x: 100, y: 200, size: 16 }
+
+  assert.deepEqual(resizeFreeText(text, 1, 1, 40, 14), { ...text, size: 20 })
+  assert.deepEqual(resizeFreeText(text, -1, -1, -40, -14), { ...text, x: 60, y: 186, size: 20 })
+})
+
+test('a free text block starts with default text centered at the requested point', () => {
+  const makeFreeText = mapModel.makeFreeText ?? (() => ({}))
+
+  assert.deepEqual(makeFreeText({ x: 180, y: 128 }, 't1'), {
+    id: 't1',
+    text: 'Text',
+    x: 100,
+    y: 100,
+    size: 16,
+  })
+})
+
+test('free text blocks survive a save and load while invalid entries are skipped', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: [{ id: 'root', data: { label: 'Root' } }],
+    edges: [],
+    freeTexts: [
+      { id: 't1', text: ' Caption ', x: 10, y: 20, size: 500 },
+      { id: 't1', text: 'Text', x: 0, y: 0 },
+      { id: 'empty', text: '   ', x: 0, y: 0, size: 16 },
+      { id: 'bad-position', text: 'Text', x: 'left', y: 0, size: 16 },
+    ],
+  })
+  const texts = map.freeTexts ?? []
+
+  assert.deepEqual(texts[0], { id: 't1', text: 'Caption', x: 10, y: 20, size: 48 })
+  assert.equal(texts.length, 2)
+  assert.notEqual(texts[1].id, 't1')
+  assert.equal(texts[1].size, 16)
+  assert.equal('freeTexts' in normalizeMap({ version: 2, nodes: [{ data: { label: 'A' } }], edges: [] }), false)
+  assert.deepEqual(normalizeMap(JSON.parse(JSON.stringify(map))).freeTexts, map.freeTexts)
+})
+
 test('marks survive a save and load, unknown ones are skipped, and text exports prefix the title', () => {
   const map = normalizeMap({
     version: 2,

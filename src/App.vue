@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, w
 import { BaseEdge, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
   DEFAULT_SIZE,
+  FREE_TEXT_SIZE,
   LIBRARY_STORAGE_KEY,
   LINK_FRAME,
   MARKS,
@@ -27,6 +28,7 @@ import {
   linkPath,
   linkSides,
   makeEdge,
+  makeFreeText,
   makeNode,
   markName,
   mergeImageNode,
@@ -51,6 +53,7 @@ import {
   reparentBranches,
   relativeTime,
   resizeFreeMark,
+  resizeFreeText,
   rigidRootBranch,
   searchOrder,
   selectedBranchRoots,
@@ -108,9 +111,14 @@ const nodes = ref(initial.nodes)
 let pendingLayoutInitial = Boolean(initial.needsLayout)
 const edges = ref(initial.edges)
 const freeMarks = ref(initial.freeMarks ?? [])
+const freeTexts = ref(initial.freeTexts ?? [])
 const links = ref(initial.links ?? [])
 const selectedLinkId = ref(null)
 const selectedMarkId = ref(null)
+const selectedTextId = ref(null)
+const editingTextId = ref(null)
+const textDraft = ref('')
+let textEditStart = null
 const marksOpen = ref(false)
 const marksWrap = ref(null)
 const hoveredMark = ref(null)
@@ -398,6 +406,7 @@ function cleanMap() {
       data: { kind: 'tree' },
     })),
     ...(freeMarks.value.length ? { freeMarks: freeMarks.value.map((mark) => ({ ...mark })) } : {}),
+    ...(freeTexts.value.length ? { freeTexts: freeTexts.value.map((text) => ({ ...text })) } : {}),
     ...(links.value.length ? { links: links.value.map((link) => ({ ...link })) } : {}),
   }
 }
@@ -421,8 +430,13 @@ function openMap(map) {
   nodes.value = normalized.nodes
   edges.value = normalized.edges
   freeMarks.value = normalized.freeMarks ?? []
+  freeTexts.value = normalized.freeTexts ?? []
   links.value = normalized.links ?? []
   editingId.value = null
+  editingTextId.value = null
+  selectedTextId.value = null
+  textDraft.value = ''
+  textEditStart = null
   contextMenu.value = null
   applyVisibility()
   hydrateImageUrls()
@@ -1520,7 +1534,8 @@ function showNodeMenu({ event, node }) {
 
 function closeOverlays() {
   contextMenu.value = null
-  selectedMarkId.value = selectedLinkId.value = null
+  selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
+  finishFreeTextEditing()
   finishEditing()
 }
 
@@ -1577,9 +1592,10 @@ function onMarkGridKeydown(event) {
 }
 
 function selectMark(id) {
+  finishFreeTextEditing()
   clearSelection()
   for (const edge of edges.value) edge.selected = false
-  selectedLinkId.value = null
+  selectedLinkId.value = selectedTextId.value = null
   selectedMarkId.value = id
 }
 
@@ -1674,9 +1690,89 @@ function onMarkHandleDown(event, sx, sy) {
   dragFreeMark(event, selectedMark.value, (origin, dx, dy, moved) => resizeFreeMark(origin, sx, sy, dx, dy, moved.shiftKey ? 8 : 1))
 }
 
-// Picking a node lets go of the free mark and of the link, and the other way round.
+// Free text uses the same move, resize, selection and undo flow as a free icon.
+const selectedText = computed(() => freeTexts.value.find((text) => text.id === selectedTextId.value))
+const textFrame = computed(() => {
+  const text = selectedText.value
+  if (!text || editingTextId.value === text.id) return null
+  const { x, y, zoom } = viewport.value
+  return {
+    left: `${text.x * zoom + x - 5}px`,
+    top: `${text.y * zoom + y - 5}px`,
+    width: `${text.size * FREE_TEXT_SIZE.width * zoom + 10}px`,
+    height: `${text.size * FREE_TEXT_SIZE.height * zoom + 10}px`,
+  }
+})
+
+function selectFreeText(id) {
+  if (editingTextId.value && editingTextId.value !== id) finishFreeTextEditing()
+  clearSelection()
+  for (const edge of edges.value) edge.selected = false
+  selectedMarkId.value = selectedLinkId.value = null
+  selectedTextId.value = id
+}
+
+function editFreeText(id, before = snapshot()) {
+  const text = freeTexts.value.find((item) => item.id === id)
+  if (!text) return
+  selectFreeText(id)
+  editingTextId.value = id
+  textDraft.value = text.text
+  textEditStart = before
+  nextTick(() => document.querySelector(`[data-text-editor="${CSS.escape(id)}"]`)?.select())
+}
+
+function finishFreeTextEditing(save = true) {
+  if (!editingTextId.value) return
+  const text = freeTexts.value.find((item) => item.id === editingTextId.value)
+  const value = textDraft.value.trim()
+  if (save && text && value) text.text = value.slice(0, MAX_LABEL_LENGTH)
+  editingTextId.value = null
+  textDraft.value = ''
+  record(textEditStart)
+  textEditStart = null
+}
+
+function onCanvasDoubleClick(event) {
+  if (event.button || !event.target.classList?.contains('vue-flow__pane')) return
+  const before = snapshot()
+  const text = makeFreeText(screenToFlowCoordinate({ x: event.clientX, y: event.clientY }), documentId())
+  freeTexts.value.push(text)
+  editFreeText(text.id, before)
+}
+
+function onTextPointerDown(event, text) {
+  if (event.button) return
+  selectFreeText(text.id)
+  dragFreeMark(event, text, (origin, dx, dy) => ({ x: origin.x + dx, y: origin.y + dy }))
+}
+
+function onTextHandleDown(event, sx, sy) {
+  dragFreeMark(event, selectedText.value, (origin, dx, dy) => resizeFreeText(origin, sx, sy, dx, dy))
+}
+
+function removeFreeText() {
+  const before = snapshot()
+  freeTexts.value = freeTexts.value.filter((text) => text.id !== selectedTextId.value)
+  selectedTextId.value = null
+  record(before)
+}
+
+function duplicateFreeText() {
+  const before = snapshot()
+  const { text, x, y, size } = selectedText.value
+  const copy = { id: documentId(), text, x: x + 16, y: y + 16, size }
+  freeTexts.value.push(copy)
+  selectFreeText(copy.id)
+  record(before)
+}
+
+// Picking a node lets go of the free canvas objects and of the link, and the other way round.
 watch(selectedCount, (count) => {
-  if (count) selectedMarkId.value = selectedLinkId.value = null
+  if (count) {
+    finishFreeTextEditing()
+    selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
+  }
 })
 
 // Links outside the tree (9a). Like free marks they are their own list, outside layout and Vue Flow;
@@ -1879,9 +1975,10 @@ function dragLink(event, fixedId, end, link = null) {
 }
 
 function selectLink(id) {
+  finishFreeTextEditing()
   clearSelection()
   for (const edge of edges.value) edge.selected = false
-  selectedMarkId.value = null
+  selectedMarkId.value = selectedTextId.value = null
   selectedLinkId.value = id
 }
 
@@ -2191,6 +2288,7 @@ function switchDocument(id, { keepMenu = false } = {}) {
   if (id === activeId.value) return
   const next = documents.value.find((document) => document.id === id)
   if (!next) return
+  finishFreeTextEditing()
   finishEditing()
   clearTimeout(saveTimer)
   persistDocuments(false)
@@ -2203,6 +2301,7 @@ function switchDocument(id, { keepMenu = false } = {}) {
 }
 
 function addDocument(map) {
+  finishFreeTextEditing()
   finishEditing()
   clearTimeout(saveTimer)
   if (!persistDocuments(false)) return false
@@ -2248,6 +2347,7 @@ function deleteDocument(id) {
   finalizeDeletion()
   const wasActive = id === activeId.value
   if (wasActive) {
+    finishFreeTextEditing()
     finishEditing()
     clearTimeout(saveTimer)
     persistDocuments(false)
@@ -2488,10 +2588,10 @@ function runShortcut(id, event) {
     case 'addChild': return addChild()
     case 'addSibling': return selectedLink.value ? editLinkLabel() : addSibling()
     case 'navigate': return navigateNodes(event.key)
-    case 'remove': return selectedMark.value ? removeFreeMark() : selectedLink.value ? removeLink() : removeSelected()
+    case 'remove': return selectedText.value ? removeFreeText() : selectedMark.value ? removeFreeMark() : selectedLink.value ? removeLink() : removeSelected()
     case 'marks': return toggleMarks()
     case 'mark': return applyMark(MARKS.find((mark) => mark.key === event.key).id)
-    case 'duplicateMark': return duplicateFreeMark()
+    case 'duplicateMark': return selectedText.value ? duplicateFreeText() : duplicateFreeMark()
     case 'collapse':
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
     case 'help': return openHelp(event.target)
@@ -2501,7 +2601,7 @@ function runShortcut(id, event) {
       contextMenu.value = null
       closeMenus()
       for (const node of nodes.value) node.selected = false
-      selectedMarkId.value = selectedLinkId.value = null
+      selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
   }
 }
 
@@ -2550,8 +2650,8 @@ function onKeydown(event) {
   // Keys inside the menu must not edit the map on the canvas; the icon set still takes its own keys.
   if (event.key !== 'Escape' && target instanceof Element && target.closest('.island, .island-menu, .row-menu, .app-menu, .undo-toast')
     && !(target.closest('.mark-wrap') && (shortcut?.id === 'marks' || shortcut?.id === 'mark'))) return
-  // Without a selected mark Cmd+D stays with the browser.
-  if (shortcut?.id === 'duplicateMark' && !selectedMark.value) return
+  // Without a selected free object Cmd+D stays with the browser.
+  if (shortcut?.id === 'duplicateMark' && !selectedMark.value && !selectedText.value) return
   if (shortcut) {
     if (shortcut.id !== 'deselect') event.preventDefault()
     // Vue Flow uses arrow keys to move selected nodes. Navigation owns these
@@ -2696,7 +2796,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" @click="closeMenus">
     <main class="workspace" :class="{ 'inspector-open': inspectorOpen }">
-      <section ref="canvasElement" class="canvas-wrap" :class="{ 'link-aim': linkHover, linking: linkDrag, 'link-denied': linkDrag?.denied, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @pointerdown.capture="onCanvasPointerDown" @pointermove="onCanvasPointerMove" @pointerleave="onCanvasPointerLeave" @dragover.prevent @drop.prevent="onImageDrop">
+      <section ref="canvasElement" class="canvas-wrap" :class="{ 'link-aim': linkHover, linking: linkDrag, 'link-denied': linkDrag?.denied, searching: searchMatches.length }" @wheel.capture="onCanvasWheel" @pointerdown.capture="onCanvasPointerDown" @pointermove="onCanvasPointerMove" @pointerleave="onCanvasPointerLeave" @dblclick="onCanvasDoubleClick" @dragover.prevent @drop.prevent="onImageDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -2723,7 +2823,7 @@ onBeforeUnmount(() => {
           @node-drag-stop="onNodeDragStop"
           @node-double-click="({ node }) => focusEditor(node.id)"
           @node-context-menu="showNodeMenu"
-          @edge-click="selectedMarkId = selectedLinkId = null"
+          @edge-click="selectedMarkId = selectedLinkId = selectedTextId = null"
           @pane-click="closeOverlays"
         >
           <template #zoom-pane>
@@ -2775,6 +2875,38 @@ onBeforeUnmount(() => {
               :style="{ left: `${mark.x}px`, top: `${mark.y}px`, width: `${mark.size}px`, height: `${mark.size}px` }"
               @pointerdown="onMarkPointerDown($event, mark)"
             ><MarkIcon :id="mark.mark" :size="mark.size" /></div>
+            <div
+              v-for="text in freeTexts"
+              :key="text.id"
+              class="free-text nopan"
+              :class="{ selected: text.id === selectedTextId, editing: text.id === editingTextId }"
+              :style="{
+                left: `${text.x}px`,
+                top: `${text.y}px`,
+                width: `${text.size * FREE_TEXT_SIZE.width}px`,
+                height: `${text.size * FREE_TEXT_SIZE.height}px`,
+                fontSize: `${text.size}px`,
+              }"
+              :aria-label="text.text"
+              tabindex="-1"
+              @pointerdown="onTextPointerDown($event, text)"
+              @dblclick.stop="editFreeText(text.id)"
+            >
+              <textarea
+                v-if="text.id === editingTextId"
+                v-model="textDraft"
+                :data-text-editor="text.id"
+                name="canvas-text"
+                aria-label="Canvas text"
+                :maxlength="MAX_LABEL_LENGTH"
+                @pointerdown.stop
+                @dblclick.stop
+                @keydown.enter.exact.prevent="finishFreeTextEditing()"
+                @keydown.esc.prevent="finishFreeTextEditing(false)"
+                @blur="finishFreeTextEditing()"
+              ></textarea>
+              <span v-else>{{ text.text }}</span>
+            </div>
           </template>
 
           <template #edge-branch="edge">
@@ -3223,6 +3355,17 @@ onBeforeUnmount(() => {
             class="mark-handle"
             :style="{ left: sx < 0 ? 0 : '100%', top: sy < 0 ? 0 : '100%', cursor: sx === sy ? 'nwse-resize' : 'nesw-resize' }"
             @pointerdown.prevent="onMarkHandleDown($event, sx, sy)"
+          ></i>
+        </div>
+
+        <div v-if="textFrame" class="mark-frame text-frame" :style="textFrame">
+          <span class="mark-size">{{ selectedText.size }} px</span>
+          <i
+            v-for="[sx, sy] in MARK_CORNERS"
+            :key="`${sx}${sy}`"
+            class="mark-handle"
+            :style="{ left: sx < 0 ? 0 : '100%', top: sy < 0 ? 0 : '100%', cursor: sx === sy ? 'nwse-resize' : 'nesw-resize' }"
+            @pointerdown.prevent="onTextHandleDown($event, sx, sy)"
           ></i>
         </div>
 
