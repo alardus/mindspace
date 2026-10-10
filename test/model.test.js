@@ -800,3 +800,20 @@ test('a link is a curve square to its sides, with the arrowhead off the frame', 
   assert.match(linkPath({ x: 0, y: 0, nx: 1, ny: 0 }, { x: 20, y: 0, nx: -1, ny: 0 }, 'none').d, /C40,0 -20,0/)
   assert.match(linkPath({ x: 0, y: 0, nx: 0, ny: 1 }, { x: 0, y: 900, nx: 0, ny: -1 }, 'none').d, /C0,160 0,740/)
 })
+
+test('library keeps valid Drive backup metadata and drops broken ones', () => {
+  const map = starterMap()
+  const backup = { fileId: 'f1', driveVersion: '7', md5Checksum: 'abc', saveId: 's1', state: 'linked', name: 'Plan.mindmap', folder: 'Mindspace', savedAt: 1700000000000, pending: true }
+  const { documents } = normalizeLibrary({ documents: [
+    { id: 'a', map, googleDriveBackup: backup },
+    { id: 'b', map, googleDriveBackup: { ...backup, state: 'conflict', pending: false, savedAt: 'soon', token: 'secret' } },
+    { id: 'c', map, googleDriveBackup: { ...backup, state: 'paused', driveVersion: 7, name: null } },
+    { id: 'd', map, googleDriveBackup: { ...backup, fileId: '' } },
+    { id: 'e', map, googleDriveBackup: 'f1' },
+    { id: 'f', map },
+  ] })
+  assert.deepEqual(documents[0].googleDriveBackup, backup)
+  assert.deepEqual(documents[1].googleDriveBackup, { fileId: 'f1', driveVersion: '7', md5Checksum: 'abc', saveId: 's1', state: 'conflict', name: 'Plan.mindmap', folder: 'Mindspace' })
+  assert.deepEqual(documents[2].googleDriveBackup, { ...backup, driveVersion: '', name: '' })
+  for (const index of [3, 4, 5]) assert.equal('googleDriveBackup' in documents[index], false)
+})

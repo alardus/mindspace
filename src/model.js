@@ -686,6 +686,23 @@ export function normalizeMap(input) {
   return map
 }
 
+// The link of a map to its Google Drive file. Only known fields survive: nothing else about Drive may reach storage.
+export function normalizeBackup(value) {
+  if (!value || typeof value !== 'object' || typeof value.fileId !== 'string' || !value.fileId) return undefined
+  const text = (field) => (typeof value[field] === 'string' ? value[field] : '')
+  return {
+    fileId: value.fileId,
+    driveVersion: text('driveVersion'),
+    md5Checksum: text('md5Checksum'),
+    saveId: text('saveId'),
+    state: value.state === 'conflict' ? 'conflict' : 'linked',
+    name: text('name'),
+    folder: text('folder'),
+    ...(Number.isFinite(value.savedAt) ? { savedAt: value.savedAt } : {}),
+    ...(value.pending === true ? { pending: true } : {}),
+  }
+}
+
 export function normalizeLibrary(input) {
   if (!input || typeof input !== 'object' || !Array.isArray(input.documents)) {
     throw new Error('Local maps are corrupted')
@@ -697,6 +714,8 @@ export function normalizeLibrary(input) {
     try {
       const entry = { id: document.id, map: normalizeMap(document.map) }
       if (Number.isFinite(document.updatedAt)) entry.updatedAt = document.updatedAt
+      const backup = normalizeBackup(document.googleDriveBackup)
+      if (backup) entry.googleDriveBackup = backup
       documents.push(entry)
       ids.add(document.id)
     } catch {
