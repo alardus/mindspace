@@ -98,3 +98,19 @@ test('every icon mark has its color, and its glyph is readable on it in both the
     assert.ok(contrast(tokens['--icon-milestone'], tokens['--canvas']) >= 3)
   }
 })
+
+test('warning tokens are readable in both themes', () => {
+  assert.deepEqual([light['--warn'], light['--warn-text'], light['--warn-bg']], ['#C9821B', '#8A5A12', '#FBF3E4'])
+  assert.deepEqual([dark['--warn'], dark['--warn-text'], dark['--warn-bg']], ['#E0A34A', '#E8B66A', '#33291A'])
+  for (const tokens of [light, dark]) {
+    assert.ok(contrast(tokens['--ink'], tokens['--warn-bg']) >= 4.5)
+    assert.ok(contrast(tokens['--warn-text'], tokens['--surface']) >= 4.5)
+    assert.ok(contrast(tokens['--warn'], tokens['--surface']) >= 3)
+  }
+})
+
+test('the destructive dialog button keeps readable text in both themes', () => {
+  // White on the dark theme's light red would be 2.7:1, so the text follows the theme instead.
+  assert.match(css, /\.drive-button\.danger \{[^}]*color: var\(--on-primary\)/)
+  for (const tokens of [light, dark]) assert.ok(contrast(tokens['--on-primary'], tokens['--danger']) >= 4.5)
+})

@@ -24,6 +24,9 @@
   --saving: #D4A64A;
   --danger: #B2412E;
   --danger-bg: #FBEFEC;
+  --warn: #C9821B;
+  --warn-text: #8A5A12;
+  --warn-bg: #FBF3E4;
   --primary: #1F2421;
   --primary-hover: #33392F;
   --on-primary: #FFFFFF;
@@ -92,6 +95,9 @@
   --saving: #E0B65E;
   --danger: #F07A66;
   --danger-bg: #3A221E;
+  --warn: #E0A34A;
+  --warn-text: #E8B66A;
+  --warn-bg: #33291A;
   --primary: #ECEBE6;
   --primary-hover: #FFFFFF;
   --on-primary: #161816;
@@ -185,8 +191,40 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .help-enter-active, .help-leave-active, .help-enter-active .help-dialog, .help-leave-active .help-dialog { transition: opacity .15s ease, transform .15s ease; }
 .help-enter-from, .help-leave-to { opacity: 0; }
 .help-enter-from .help-dialog, .help-leave-to .help-dialog { opacity: 0; transform: scale(.98); }
+/* Google Drive dialogs (10b): the frame of the shortcuts dialog, narrower. */
+.drive-dialog { gap: 16px; width: 420px; padding: 22px; }
+.drive-dialog.replace { gap: 18px; width: 400px; }
+.drive-dialog header { display: flex; flex-direction: column; gap: 6px; }
+.drive-dialog h2 { margin: 0; font-size: 17px; font-weight: 600; line-height: 22px; overflow-wrap: anywhere; }
+.drive-dialog p { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.5; text-wrap: pretty; }
+.drive-options { display: flex; flex-direction: column; gap: 8px; }
+/* The outline doubles as the 1.5px focus border, so the card does not shift when it gets focus. */
+.drive-option { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; color: var(--ink); background: transparent; border: 1px solid var(--border-strong); border-radius: 10px; cursor: pointer; text-align: left; outline: 1.5px solid transparent; outline-offset: -1.5px; }
+.drive-option:hover:not(:disabled) { background: var(--hover); }
+.drive-option:focus { outline-color: var(--focus); }
+.drive-option:disabled, .drive-button:disabled { cursor: default; opacity: .6; }
+.drive-option svg { flex: none; width: 20px; height: 20px; margin-top: 1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.drive-option span { display: flex; flex-direction: column; gap: 2px; }
+.drive-option strong { font-size: 14px; font-weight: 600; }
+.drive-option small { color: var(--muted); font-size: 13px; text-wrap: pretty; }
+.drive-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
+.drive-button { height: 34px; padding: 0 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.drive-button:hover:not(:disabled) { background: var(--hover); }
+.drive-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.drive-button.text { padding: 0 12px; background: transparent; border-color: transparent; }
+.drive-button.danger { color: var(--on-primary); background: var(--danger); border-color: transparent; font-weight: 600; }
+.drive-button.danger:hover:not(:disabled) { background: color-mix(in oklab, var(--danger) 88%, var(--ink)); }
 .document-button { display: flex; align-items: center; gap: 8px; min-width: 0; height: 32px; padding: 0 8px 0 10px; color: var(--ink); background: transparent; border-radius: 8px; }
 .document-button:hover, .document-button.active { background: var(--hover); }
+/* Storage mark (10a): a dot for a map kept on this device only, a cloud for one backed up to Google Drive.
+   The badge is ringed in the button's own background, so it reads apart from the cloud. */
+.document-button { --mark-ring: var(--surface); }
+.document-button:hover, .document-button.active { --mark-ring: var(--hover); }
+.store-mark { position: relative; flex: none; display: grid; place-items: center; width: 18px; height: 18px; color: var(--muted); }
+.store-mark svg { width: 16px; height: 16px; stroke-width: 1.6; }
+.store-mark.idle.badge { color: var(--muted-2); }
+.store-badge { position: absolute; top: 1px; right: -1px; width: 7px; height: 7px; background: var(--muted-2); border-radius: 50%; box-shadow: 0 0 0 1.5px var(--mark-ring); }
+.store-mark.warn .store-badge { background: var(--warn); }
 .document-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
 .document-button .chevron { flex: none; width: 14px; height: 14px; color: var(--muted); stroke-width: 1.8; }
 .rename-input { width: 240px; height: 32px; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--focus); border-radius: 8px; outline: none; font-size: 15px; font-weight: 600; }
@@ -198,10 +236,26 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .island-menu hr { width: calc(100% - 8px); margin: 6px 4px; border: 0; border-top: 1px solid var(--divider); }
 .island-menu button { border: 0; cursor: pointer; font-size: 14px; }
 .island-menu button:disabled { opacity: .4; cursor: default; }
-.document-menu { top: 62px; left: 12px; width: 340px; }
-.menu-status { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px 10px; margin-bottom: 6px; border-bottom: 1px solid var(--divider); }
-.menu-status span { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-.menu-status small, .document-item small, .menu-item small { color: var(--muted-2); font-size: 12px; }
+.document-menu { top: 62px; left: 12px; width: 360px; }
+/* Storage block (10a): where the active map is kept, and the one place to deal with a backup that needs attention. */
+.storage { display: flex; flex-direction: column; gap: 2px; padding: 4px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--divider); }
+.storage-title { padding: 4px 6px 2px; color: var(--muted-2); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.storage-row { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 6px; }
+.storage-row > svg { flex: none; width: 16px; height: 16px; color: var(--text-2); stroke-width: 1.5; }
+.storage-row.drive > svg { stroke-width: 1.6; }
+.storage-name { flex: 1; font-size: 13px; }
+.storage-status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.storage-status.idle .save-dot { background: var(--muted-2); }
+.storage-status.warn { color: var(--warn-text); }
+.storage-status.warn .save-dot { background: var(--warn); }
+.island-menu .storage-connect { height: 26px; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 7px; font-size: 13px; font-weight: 500; }
+.island-menu .storage-connect:hover { background: var(--hover); }
+/* Lines under the Drive row start at its text, not at its icon. */
+.storage-file { display: flex; align-items: center; gap: 6px; margin-top: -6px; padding: 0 6px 0 32px; color: var(--muted-2); font-size: 12px; }
+.storage-file span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-file a { flex: none; color: var(--text-2); text-decoration: none; }
+.storage-file a:hover, .storage-file a:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
+.document-item small, .menu-item small { color: var(--muted-2); font-size: 12px; }
 .document-search { display: flex; align-items: center; gap: 8px; height: 36px; margin: 0 2px 6px; padding: 0 10px; background: var(--canvas); border-radius: 8px; }
 .document-search svg { flex: none; width: 14px; height: 14px; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; }
 .document-search input { flex: 1; min-width: 0; padding: 0; color: var(--ink); background: transparent; border: 0; outline: none; font-size: 14px; }
@@ -212,11 +266,16 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .document-item.active { background: var(--selected); }
 .document-item.flash { animation: doc-flash 1.5s ease-out; }
 @keyframes doc-flash { from { background: var(--selected); } to { background: transparent; } }
-.document-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+/* The title takes only its own width, so the cloud of a backed-up map sits right after it; the metadata (or “⋯”) keeps to the right. */
+.document-item-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
 .document-item.active .document-item-title { font-weight: 600; }
-.document-item small { flex: none; }
+.document-item small { flex: none; margin-left: auto; }
+/* −2px: 8px from the title inside the row's 10px gap, without moving the metadata or the check. */
+.doc-cloud { flex: none; display: flex; margin-left: -2px; color: var(--muted-2); }
+.doc-cloud.warn { color: var(--warn); }
+.doc-cloud svg { width: 14px; height: 14px; stroke-width: 1.6; }
 /* “⋯” takes the place of the metadata on hover, focus or open submenu. */
-.row-more { flex: none; display: none; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--muted); background: transparent; border-radius: 6px; }
+.row-more { flex: none; display: none; place-items: center; width: 24px; height: 24px; margin-left: auto; padding: 0; color: var(--muted); background: transparent; border-radius: 6px; }
 .row-more:hover, .document-item.menu-open .row-more { background: var(--pressed); }
 .row-more svg { width: 16px; height: 16px; fill: currentColor; }
 .document-item:hover .row-more, .document-item:focus-within .row-more, .document-item.menu-open .row-more { display: grid; }
@@ -228,9 +287,10 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .doc-row-leave-active { transition: height .15s ease, opacity .15s ease; }
 .doc-row-leave-to { height: 0; opacity: 0; }
 
-.row-menu { position: fixed; z-index: 40; display: flex; flex-direction: column; width: 200px; padding: 4px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-menu); }
+.row-menu { position: fixed; z-index: 40; display: flex; flex-direction: column; width: 236px; padding: 4px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-menu); }
 .row-menu button { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px; color: var(--ink); background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; text-align: left; outline: none; }
-.row-menu button span { flex: 1; }
+.row-menu button span { flex: 1; white-space: nowrap; }
+.row-menu button svg { flex: none; width: 15px; height: 15px; stroke-width: 1.6; }
 .row-menu button:hover, .row-menu button:focus-visible { background: var(--hover); }
 .row-menu button.danger { color: var(--danger); }
 .row-menu button.danger:hover, .row-menu button.danger:focus-visible { background: var(--danger-bg); }
@@ -548,6 +608,10 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .undo-toast { display: flex; align-items: center; gap: 16px; padding: 10px 12px 10px 16px; color: var(--toast-text); background: var(--toast-bg); border-radius: 10px; font-size: 14px; }
 .undo-toast button { padding: 4px 8px; color: var(--toast-text); background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; }
 .undo-toast button:hover, .undo-toast button:focus-visible { background: color-mix(in oklab, var(--toast-text) 12%, transparent); outline: none; }
+/* Status toasts (10c): −2px brings the dot 14px from the text inside the Undo toast's 16px gap. */
+.toast-dot { flex: none; width: 8px; height: 8px; margin-right: -2px; background: var(--muted-2); border-radius: 50%; }
+.toast-dot.ok { background: var(--saved); }
+.toast-dot.warn { background: var(--warn); }
 .toast-enter-active, .toast-leave-active { transition: .2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 8px); }
 .image-preview { max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 36px 12px 12px; background: var(--lightbox); border: 0; border-radius: 12px; box-shadow: var(--shadow-modal); }
