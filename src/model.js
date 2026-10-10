@@ -521,6 +521,25 @@ export function snapNode(rect, candidates, threshold, maxDistance) {
 
 export const DEFAULT_SIZE = { width: 180, height: 30, rootWidth: 200, rootHeight: 56 }
 
+export function snapFreeObject(rect, moving, nodes, freeMarks, freeTexts, threshold, maxDistance) {
+  const candidates = [
+    ...nodes.filter((node) => !node.hidden).map((node) => ({
+      x: node.position.x,
+      y: node.position.y,
+      width: node.dimensions?.width || (node.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width),
+      height: node.dimensions?.height || (node.data.root ? DEFAULT_SIZE.rootHeight : DEFAULT_SIZE.height),
+    })),
+    ...freeMarks.filter((mark) => mark !== moving).map((mark) => ({ x: mark.x, y: mark.y, width: mark.size, height: mark.size })),
+    ...freeTexts.filter((text) => text !== moving).map((text) => ({
+      x: text.x,
+      y: text.y,
+      width: text.size * FREE_TEXT_SIZE.width,
+      height: text.size * FREE_TEXT_SIZE.height,
+    })),
+  ]
+  return snapNode(rect, candidates, threshold, maxDistance)
+}
+
 export function layoutVerticalGap(settings = DEFAULT_SETTINGS) {
   return 18 * DENSITY[normalizeSettings(settings).density]
 }

@@ -631,6 +631,18 @@ test('equal vertical gaps use horizontal markers', () => {
   ])
 })
 
+test('free objects snap to visible blocks, icons and text, but not themselves', () => {
+  const moving = { id: 'moving', x: 94, y: 80, size: 20 }
+  const hidden = { id: 'hidden', hidden: true, position: { x: 95, y: 0 }, dimensions: { width: 20, height: 20 }, data: {} }
+  const block = { id: 'block', position: { x: 100, y: 0 }, dimensions: { width: 20, height: 20 }, data: {} }
+  const icon = { id: 'icon', x: 200, y: 0, size: 20 }
+  const text = { id: 'text', x: 300, y: 0, size: 2 }
+
+  assert.equal(mapModel.snapFreeObject({ x: 94, y: 80, width: 20, height: 20 }, moving, [hidden, block], [moving], [], 8, 400).x, 100)
+  assert.equal(mapModel.snapFreeObject({ x: 194, y: 80, width: 20, height: 20 }, moving, [], [moving, icon], [], 8, 400).x, 200)
+  assert.equal(mapModel.snapFreeObject({ x: 294, y: 80, width: 20, height: 20 }, moving, [], [moving], [text], 8, 400).x, 300)
+})
+
 test('node marks keep the set order, one status at most, and toggle across a selection', () => {
   const { MARKS, normalizeMarks, toggleMark } = mapModel
   assert.deepEqual(MARKS.map((mark) => mark.key).join(''), '1234567890')

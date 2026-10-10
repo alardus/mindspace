@@ -58,6 +58,7 @@ import {
   searchOrder,
   selectedBranchRoots,
   shiftNodesBelow,
+  snapFreeObject,
   snapNode,
   starterMap,
   toMarkdown,
@@ -1661,6 +1662,7 @@ function dragFreeMark(event, mark, update) {
   const before = snapshot()
   const origin = { ...mark }
   let dragging = false
+  if (alignmentGuides.value.length) alignmentGuides.value = []
   const move = (moved) => {
     const dx = moved.clientX - event.clientX
     const dy = moved.clientY - event.clientY
@@ -1673,6 +1675,7 @@ function dragFreeMark(event, mark, update) {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', stop)
     window.removeEventListener('pointercancel', stop)
+    if (alignmentGuides.value.length) alignmentGuides.value = []
     record(before)
   }
   window.addEventListener('pointermove', move)
@@ -1680,10 +1683,29 @@ function dragFreeMark(event, mark, update) {
   window.addEventListener('pointercancel', stop)
 }
 
+function moveFreeObject(item, origin, dx, dy, event, width, height) {
+  const rect = { x: origin.x + dx, y: origin.y + dy, width, height }
+  if (!event.shiftKey) {
+    if (alignmentGuides.value.length) alignmentGuides.value = []
+    return { x: rect.x, y: rect.y }
+  }
+  const snapped = snapFreeObject(
+    rect,
+    item,
+    nodes.value,
+    freeMarks.value,
+    freeTexts.value,
+    8 / viewport.value.zoom,
+    400 / viewport.value.zoom,
+  )
+  alignmentGuides.value = snapped.guides
+  return { x: snapped.x, y: snapped.y }
+}
+
 function onMarkPointerDown(event, mark) {
   if (event.button) return
   selectMark(mark.id)
-  dragFreeMark(event, mark, (origin, dx, dy) => ({ x: origin.x + dx, y: origin.y + dy }))
+  dragFreeMark(event, mark, (origin, dx, dy, moved) => moveFreeObject(mark, origin, dx, dy, moved, origin.size, origin.size))
 }
 
 function onMarkHandleDown(event, sx, sy) {
@@ -1744,7 +1766,15 @@ function onCanvasDoubleClick(event) {
 function onTextPointerDown(event, text) {
   if (event.button) return
   selectFreeText(text.id)
-  dragFreeMark(event, text, (origin, dx, dy) => ({ x: origin.x + dx, y: origin.y + dy }))
+  dragFreeMark(event, text, (origin, dx, dy, moved) => moveFreeObject(
+    text,
+    origin,
+    dx,
+    dy,
+    moved,
+    origin.size * FREE_TEXT_SIZE.width,
+    origin.size * FREE_TEXT_SIZE.height,
+  ))
 }
 
 function onTextHandleDown(event, sx, sy) {
