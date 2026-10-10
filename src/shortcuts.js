@@ -26,7 +26,7 @@ export const hasMod = (event) => event.metaKey || event.ctrlKey
 export const hasLinkMod = (event, mac = IS_MAC) => mac ? event.metaKey : event.ctrlKey
 const letter = (event) => event.key.toLowerCase()
 
-export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Maps', 'General']
+export const SHORTCUT_GROUPS = ['Nodes', 'Editing', 'Canvas', 'Branches', 'Icons', 'Maps', 'General']
 
 export const SHORTCUTS = [
   { id: 'addChild', group: 'Nodes', label: 'Child node', keys: ['Tab'], match: (event) => event.key === 'Tab' && !event.shiftKey },
@@ -57,6 +57,12 @@ export const SHORTCUTS = [
   { id: 'collapse', group: 'Branches', label: 'Collapse', keys: ['Alt', '←'], match: (event) => event.altKey && event.key === 'ArrowLeft' },
   { id: 'expand', group: 'Branches', label: 'Expand', keys: ['Alt', '→'], match: (event) => event.altKey && event.key === 'ArrowRight' },
   { id: 'multiSelect', group: 'Branches', label: 'Select multiple', keys: [MULTI_SELECT_KEY, 'click'] },
+  // Bare keys: they give way to typing, so Shift+I still starts a title with a capital I.
+  { id: 'marks', group: 'Icons', label: 'Open or close the icon set', keys: ['I'], match: (event) => !hasMod(event) && !event.altKey && !event.shiftKey && letter(event) === 'i' },
+  { id: 'mark', group: 'Icons', label: 'Add or remove an icon', keys: ['1–0'], match: (event) => !hasMod(event) && !event.altKey && /^\d$/.test(event.key) },
+  { id: 'markStep', group: 'Icons', label: 'Resize in 8 px steps', keys: ['Shift', 'drag'] },
+  { id: 'markRemove', group: 'Icons', label: 'Delete selected mark', keys: ['Delete'] },
+  { id: 'duplicateMark', group: 'Icons', label: 'Duplicate mark', keys: ['Mod', 'D'], match: (event) => hasMod(event) && !event.shiftKey && !event.altKey && (letter(event) === 'd' || event.code === 'KeyD') },
   { id: 'mapNavigate', group: 'Maps', label: 'Move through map list', keys: ['↑', '↓'], bindings: [['↑'], ['↓']] },
   { id: 'mapOpen', group: 'Maps', label: 'Open map', keys: ['Enter'] },
   { id: 'mapRename', group: 'Maps', label: 'Rename map', keys: ['F2'] },

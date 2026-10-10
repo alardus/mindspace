@@ -91,6 +91,59 @@ export function normalizeImageReference(value) {
   }
 }
 
+// Icon marks (8a): a fixed set. The order here is the order in the set, on a node, and of the 1–0 keys.
+export const MARKS = [
+  { id: 'important', name: 'Important', hint: 'Priority, can’t be skipped', key: '1' },
+  { id: 'question', name: 'Question', hint: 'Unresolved, needs clarifying', key: '2' },
+  { id: 'done', name: 'Done', hint: 'Finished and confirmed', key: '3' },
+  { id: 'rejected', name: 'Rejected', hint: 'Dropped, no longer relevant', key: '4' },
+  { id: 'idea', name: 'Idea', hint: 'A thought worth developing', key: '5' },
+  { id: 'warning', name: 'Warning', hint: 'A risk or a pitfall', key: '6' },
+  { id: 'deadline', name: 'Deadline', hint: 'Depends on a date', key: '7' },
+  { id: 'owner', name: 'Owner', hint: 'Whose task it is, who to ask', key: '8' },
+  { id: 'favorite', name: 'Favorite', hint: 'The best option, a keeper', key: '9' },
+  { id: 'milestone', name: 'Milestone', hint: 'A goal or a checkpoint', key: '0' },
+]
+const MARK_NAMES = new Map(MARKS.map((mark) => [mark.id, mark.name]))
+export const markName = (id) => MARK_NAMES.get(id)
+// A node carries one status at most: setting one clears the other two.
+const STATUS_MARKS = ['done', 'rejected', 'question']
+export const MARK_SIZE = { min: 16, max: 128, initial: 28 }
+
+// Known ids only, in set order, no repeats; ids from a future set are dropped silently.
+export const normalizeMarks = (marks) => (Array.isArray(marks) ? MARKS.map((mark) => mark.id).filter((id) => marks.includes(id)) : [])
+
+// On every node already → off everywhere; otherwise on wherever it is missing.
+export function toggleMark(nodes, id) {
+  const add = !nodes.every((node) => node.data.marks?.includes(id))
+  for (const node of nodes) {
+    const kept = (node.data.marks ?? []).filter((mark) => mark !== id
+      && !(add && STATUS_MARKS.includes(id) && STATUS_MARKS.includes(mark)))
+    const marks = normalizeMarks(add ? [...kept, id] : kept)
+    if (marks.length) node.data.marks = marks
+    else delete node.data.marks
+  }
+}
+
+export const clampMarkSize = (size, step = 1) => Math.min(MARK_SIZE.max, Math.max(MARK_SIZE.min, Math.round(size / step) * step))
+
+// Corner drag of a free mark: sx, sy = ±1 name the corner. The size follows the pointer, the opposite corner stays put.
+export function resizeFreeMark(mark, sx, sy, dx, dy, step = 1) {
+  const size = clampMarkSize(mark.size + (dx * sx + dy * sy) / 2, step)
+  return { ...mark, size, x: mark.x + (sx < 0 ? mark.size - size : 0), y: mark.y + (sy < 0 ? mark.size - size : 0) }
+}
+
+export function normalizeFreeMarks(input) {
+  if (!Array.isArray(input)) return []
+  const ids = new Set()
+  return input.slice(0, 1000).flatMap((item) => {
+    if (!MARK_NAMES.has(item?.mark) || !Number.isFinite(item.x) || !Number.isFinite(item.y)) return []
+    const id = typeof item.id === 'string' && item.id && !ids.has(item.id) ? item.id : uid()
+    ids.add(id)
+    return [{ id, mark: item.mark, x: item.x, y: item.y, size: clampMarkSize(Number.isFinite(item.size) ? item.size : MARK_SIZE.initial) }]
+  })
+}
+
 export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
   const node = {
     id: options.id ?? uid(),
@@ -109,6 +162,8 @@ export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
   }
   const image = normalizeImageReference(options.image)
   if (image) node.data.image = image
+  const marks = normalizeMarks(options.marks)
+  if (marks.length) node.data.marks = marks
   return node
 }
 
@@ -534,6 +589,8 @@ export function normalizeMap(input) {
     nodes,
     edges,
   }
+  const freeMarks = normalizeFreeMarks(input.freeMarks)
+  if (freeMarks.length) map.freeMarks = freeMarks
   // Positions from pre-redesign maps assume fixed-width nodes — they need a one-time re-layout.
   if (input.version !== 2 && input.version !== 3) Object.defineProperty(map, 'needsLayout', { value: true })
   return map
@@ -565,6 +622,8 @@ export function normalizeLibrary(input) {
 }
 
 const escapeXml = (value) => String(value).replace(/[<>&"']/g, (char) => `&#${char.charCodeAt(0)};`)
+// Text exports carry a node's marks as bracketed words before the title: “[Done] Spotify”. Free marks are left out.
+const markPrefix = (node) => (node.data.marks ?? []).map((id) => `[${markName(id)}] `).join('')
 
 export function toOpml(map) {
   const children = new Map()
@@ -583,7 +642,7 @@ export function toOpml(map) {
     visited.add(id)
     const pad = '  '.repeat(depth)
     const inner = (children.get(id) ?? []).map((child) => outline(child, depth + 1)).join('')
-    const attributes = `text="${escapeXml(node.data.label || (node.data.image ? '[Image]' : 'Untitled'))}"${node.data.note ? ` _note="${escapeXml(node.data.note)}"` : ''}`
+    const attributes = `text="${escapeXml(markPrefix(node) + (node.data.label || (node.data.image ? '[Image]' : 'Untitled')))}"${node.data.note ? ` _note="${escapeXml(node.data.note)}"` : ''}`
     return inner ? `${pad}<outline ${attributes}>\n${inner}${pad}</outline>\n` : `${pad}<outline ${attributes}/>\n`
   }
   const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => outline(node.id, 2)).join('')
@@ -607,7 +666,7 @@ export function toMarkdown(map) {
     if (!node || visited.has(id)) return ''
     visited.add(id)
     const pad = '  '.repeat(depth)
-    const label = clean(node.data.label) || (node.data.image ? '[Image]' : 'Untitled')
+    const label = markPrefix(node) + (clean(node.data.label) || (node.data.image ? '[Image]' : 'Untitled'))
     const note = clean(node.data.note)
     return `${pad}- ${label}\n${note ? `${pad}  > ${note}\n` : ''}${(children.get(id) ?? []).map((child) => item(child, depth + 1)).join('')}`
   }

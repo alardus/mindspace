@@ -37,6 +37,7 @@ const cleanNode = (node) => ({
     root: Boolean(node.data.root),
     side: node.data.side,
     ...(node.data.image ? { image: { ...node.data.image } } : {}),
+    ...(node.data.marks?.length ? { marks: [...node.data.marks] } : {}),
   },
 })
 

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { PALETTES, paint } from '../src/model.js'
+import { MARKS, PALETTES, paint } from '../src/model.js'
 
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
 const block = (selector) => Object.fromEntries([...css.split(`${selector} {`)[1].split('\n}')[0]
@@ -83,4 +83,18 @@ test('branch fills keep their hue and readable text in both themes', () => {
     }
   }
   assert.deepEqual(failures, [])
+})
+
+test('every icon mark has its color, and its glyph is readable on it in both themes', () => {
+  const icons = readFileSync(new URL('../src/MarkIcon.vue', import.meta.url), 'utf8')
+  const tones = Object.fromEntries([...icons.match(/GLYPH_TONES = \{([^}]*)\}/)[1].matchAll(/(\w+): '(\w+)'/g)].map(([, id, tone]) => [id, tone]))
+  for (const tokens of [light, dark]) {
+    for (const { id } of MARKS) {
+      assert.match(icons, new RegExp(`\\n  ${id}: 'M`))
+      const ratio = contrast(tokens[`--icon-glyph-${tones[id] ?? 'light'}`], tokens[`--icon-${id}`])
+      assert.ok(ratio >= 3, `${id}: ${ratio.toFixed(2)}`)
+    }
+    // Free marks must stand out from the canvas they lie on.
+    assert.ok(contrast(tokens['--icon-milestone'], tokens['--canvas']) >= 3)
+  }
 })

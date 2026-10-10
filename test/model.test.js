@@ -616,3 +616,85 @@ test('equal vertical gaps use horizontal markers', () => {
     { x1: 2, y1: 70, x2: 18, y2: 70 },
   ])
 })
+
+test('node marks keep the set order, one status at most, and toggle across a selection', () => {
+  const { MARKS, normalizeMarks, toggleMark } = mapModel
+  assert.deepEqual(MARKS.map((mark) => mark.key).join(''), '1234567890')
+  assert.deepEqual(normalizeMarks(['milestone', 'future-mark', 'done', 'important', 'done']), ['important', 'done', 'milestone'])
+  assert.deepEqual(normalizeMarks('done'), [])
+
+  const a = makeNode('A', undefined, { marks: ['idea', 'done'] })
+  const b = makeNode('B')
+  assert.deepEqual(a.data.marks, ['done', 'idea'])
+  assert.equal('marks' in b.data, false)
+
+  // Missing on B → added there; A keeps it.
+  toggleMark([a, b], 'idea')
+  assert.deepEqual([a.data.marks, b.data.marks], [['done', 'idea'], ['idea']])
+  // On both → removed from both, and an empty list is dropped.
+  toggleMark([a, b], 'idea')
+  assert.deepEqual(a.data.marks, ['done'])
+  assert.equal('marks' in b.data, false)
+  // A status replaces the other statuses and nothing else.
+  toggleMark([a], 'important')
+  toggleMark([a], 'question')
+  assert.deepEqual(a.data.marks, ['important', 'question'])
+  toggleMark([a], 'rejected')
+  assert.deepEqual(a.data.marks, ['important', 'rejected'])
+  // Taking a status off leaves the others alone.
+  toggleMark([a], 'important')
+  assert.deepEqual(a.data.marks, ['rejected'])
+})
+
+test('free mark resize keeps the opposite corner, the 16–128 range and the Shift step', () => {
+  const { resizeFreeMark } = mapModel
+  const mark = { id: 'm', mark: 'done', x: 100, y: 200, size: 40 }
+  const far = (item) => [item.x + item.size, item.y + item.size]
+
+  assert.deepEqual(resizeFreeMark(mark, 1, 1, 20, 20), { ...mark, size: 60 })
+  // Half of the sum: a purely horizontal pull counts half.
+  assert.equal(resizeFreeMark(mark, 1, 1, 20, 0).size, 50)
+  const topLeft = resizeFreeMark(mark, -1, -1, -20, -20)
+  assert.deepEqual([topLeft.size, topLeft.x, topLeft.y], [60, 80, 180])
+  assert.deepEqual(far(topLeft), far(mark))
+  const topRight = resizeFreeMark(mark, 1, -1, 10, -10)
+  assert.deepEqual([topRight.size, topRight.x, topRight.y + topRight.size], [50, 100, 240])
+  const bottomLeft = resizeFreeMark(mark, -1, 1, -10, 10)
+  assert.deepEqual([bottomLeft.size, bottomLeft.x + bottomLeft.size, bottomLeft.y], [50, 140, 200])
+
+  assert.equal(resizeFreeMark(mark, 1, 1, 500, 500).size, 128)
+  const smallest = resizeFreeMark(mark, -1, -1, 500, 500)
+  assert.deepEqual([smallest.size, ...far(smallest)], [16, ...far(mark)])
+  assert.equal(resizeFreeMark(mark, 1, 1, 7.4, 7.4).size, 47)
+  assert.equal(resizeFreeMark(mark, 1, 1, 7.4, 7.4, 8).size, 48)
+})
+
+test('marks survive a save and load, unknown ones are skipped, and text exports prefix the title', () => {
+  const map = normalizeMap({
+    version: 2,
+    title: 'Subscriptions',
+    nodes: [
+      { id: 'root', data: { label: 'Music', marks: ['nope'] } },
+      { id: 'child', data: { label: 'Spotify', marks: ['idea', 'done'] } },
+    ],
+    edges: [{ source: 'root', target: 'child' }],
+    freeMarks: [
+      { id: 'm1', mark: 'favorite', x: 10, y: 20, size: 500 },
+      { id: 'm1', mark: 'done', x: 0, y: 0 },
+      { id: 'm3', mark: 'nope', x: 0, y: 0, size: 28 },
+      { id: 'm4', mark: 'done', x: 'left', y: 0, size: 28 },
+    ],
+  })
+  assert.equal('marks' in map.nodes[0].data, false)
+  assert.deepEqual(map.nodes[1].data.marks, ['done', 'idea'])
+  assert.deepEqual(map.freeMarks[0], { id: 'm1', mark: 'favorite', x: 10, y: 20, size: 128 })
+  assert.equal(map.freeMarks.length, 2)
+  assert.notEqual(map.freeMarks[1].id, 'm1')
+  assert.equal(map.freeMarks[1].size, 28)
+  assert.equal('freeMarks' in normalizeMap({ version: 2, nodes: [{ data: { label: 'A' } }], edges: [] }), false)
+  assert.deepEqual(normalizeMap(JSON.parse(JSON.stringify(map))).freeMarks, map.freeMarks)
+
+  assert.match(toMarkdown(map), /^- Music\n  - \[Done\] \[Idea\] Spotify$/m)
+  assert.match(toOpml(map), /<outline text="\[Done\] \[Idea\] Spotify"\/>/)
+  assert.doesNotMatch(toMarkdown(map), /Favorite/)
+})

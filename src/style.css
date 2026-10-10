@@ -54,6 +54,10 @@
   --bright-1: #E9A23B; --bright-2: #3AAA97; --bright-3: #4F95D9; --bright-4: #A479D1; --bright-5: #E0675D; --bright-6: #5BA35F;
   --calm-1: #C9A26B; --calm-2: #7FA89E; --calm-3: #7E9CBF; --calm-4: #A495B8; --calm-5: #C4877F; --calm-6: #8FA77F;
   --mono-1: #1F2421; --mono-2: #3E443F; --mono-3: #5D635C; --mono-4: #7C817A; --mono-5: #9B9F98; --mono-6: #BABDB6;
+  /* Icon marks: the color is the icon's meaning, so it ignores branch, palette and theme. Only Milestone flips in the dark theme. */
+  --icon-important: #D24B3E; --icon-question: #3478D4; --icon-done: #3C9358; --icon-rejected: #7C807A; --icon-idea: #E8B520;
+  --icon-warning: #E2782A; --icon-deadline: #8158C9; --icon-owner: #2A9A9A; --icon-favorite: #D24F86; --icon-milestone: #3D4440;
+  --icon-glyph-light: #FFFFFF; --icon-glyph-dark: #1F2421; --icon-glyph-milestone: #FFFFFF;
   font-family: 'Onest', system-ui, sans-serif;
   color: var(--ink);
   background: var(--canvas);
@@ -112,6 +116,8 @@
   --bright-1: #F0B252; --bright-2: #4FC0AC; --bright-3: #6AA9E6; --bright-4: #B691E0; --bright-5: #EB7E74; --bright-6: #72B876;
   --calm-1: #D2AE7A; --calm-2: #8DB5AB; --calm-3: #8FAACB; --calm-4: #B0A2C4; --calm-5: #CF958D; --calm-6: #9CB48D;
   --mono-1: #ECEBE6; --mono-2: #C9CAC3; --mono-3: #A6A8A0; --mono-4: #84877F; --mono-5: #73766E; --mono-6: #63665F;
+  /* Graphite would vanish on the dark canvas. */
+  --icon-milestone: #B9BBB3; --icon-glyph-milestone: #161816;
 }
 :root[data-theme="dark"] ::selection { background: rgba(106, 169, 230, .35); }
 /* Theme switch is instant: App sets this class for one frame while flipping data-theme. */
@@ -247,6 +253,28 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .divider { width: 1px; height: 20px; margin: 0 4px; background: var(--border); }
 .island-icon.active, .island-icon.active:hover { background: var(--pressed); }
 
+/* Icon set (8a): opens under its toolbar button and stays open while icons are being placed. */
+.mark-wrap { position: relative; }
+.mark-toggle svg { stroke-width: 1.6; }
+.mark-popover { position: absolute; top: 44px; right: 0; z-index: 30; display: flex; flex-direction: column; gap: 8px; width: 252px; padding: 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-menu); }
+.mark-popover header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.mark-popover header strong { flex: none; font-size: 13px; font-weight: 600; line-height: 18px; }
+.mark-popover header span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.mark-grid { display: grid; grid-template-columns: repeat(5, 40px); justify-content: space-between; row-gap: 6px; }
+.mark-grid button { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; background: transparent; border-radius: 8px; }
+.mark-grid button:hover { background: var(--hover); }
+.mark-grid button.active { background: var(--pressed); box-shadow: inset 0 0 0 1.5px var(--ink); }
+.mark-grid button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.mark-popover hr { width: 100%; margin: 0; border: 0; border-top: 1px solid var(--divider); }
+.mark-popover footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 22px; font-size: 13px; }
+.mark-popover footer span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mark-popover footer kbd { flex: none; min-width: 20px; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: 4px; font-family: inherit; font-size: 12px; line-height: 18px; text-align: center; }
+/* No hover: the hint is quiet and the key is hidden but keeps its place, so the row does not jump. */
+.mark-popover footer.idle { color: var(--muted); }
+.mark-popover footer.idle kbd { opacity: 0; }
+.marks-enter-active { transition: opacity .12s ease, transform .12s ease; }
+.marks-enter-from { opacity: 0; transform: translateY(-4px); }
+
 /* Map search (5a) */
 .search-island { position: absolute; transition: left .2s ease; left: 50%; z-index: 20; gap: 2px; padding: 0 6px 0 12px; border-color: var(--focus); box-shadow: var(--shadow-island); transform: translateX(-50%); }
 .search-icon { flex: none; width: 15px; height: 15px; color: var(--muted); stroke-width: 1.7; }
@@ -378,6 +406,12 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .node-note { overflow: hidden; color: var(--muted); font-size: 13px; line-height: 18px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .node-link { color: inherit; cursor: pointer; text-decoration-color: var(--branch); text-decoration-thickness: 2px; text-underline-offset: 2px; }
 .mind-node.deep .node-title { font-size: 14px; font-weight: 400; }
+/* Icon marks sit in the title row before the text; the node grows by their width, and the title wraps sooner. */
+.node-head { display: flex; align-items: center; gap: 5px; }
+.mark-icon { flex: none; display: block; }
+.mark-icon + .node-title { margin-left: 1px; }
+.node-editor .node-head { align-self: stretch; }
+.node-editor .node-head textarea { min-width: 0; }
 .mind-node.deep .node-note { font-size: 12px; }
 
 /* Card and Text styles for branches */
@@ -425,6 +459,16 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .node-actions::before { content: ''; position: absolute; top: -4px; bottom: -4px; width: 8px; pointer-events: auto; }
 .kids-right .node-actions::before { right: 100%; }
 .kids-left .node-actions::before { left: 100%; }
+
+/* Free marks (8b) sit above the lines and below the nodes. Vue Flow puts lines and nodes on the same z-index, so unselected
+   nodes go one level up; its inline z-index still lifts the selected ones, and their lines, to 1000. */
+.mind-flow .vue-flow__node-mind:not(.selected) { z-index: 1 !important; }
+.free-mark { position: absolute; border-radius: 50%; box-shadow: 0 0 0 2px var(--canvas), 0 3px 8px rgba(30, 32, 28, .18); cursor: grab; pointer-events: all; touch-action: none; user-select: none; }
+:root[data-theme="dark"] .free-mark { box-shadow: 0 0 0 2px var(--canvas); }
+/* The size is in map units and scales with the zoom; the frame, handles and badge are in screen pixels. */
+.mark-frame { position: absolute; z-index: 5; border: 1.5px solid var(--ink); border-radius: 4px; pointer-events: none; }
+.mark-handle { position: absolute; width: 9px; height: 9px; background: var(--surface); border: 1.5px solid var(--ink); border-radius: 2px; pointer-events: auto; touch-action: none; transform: translate(-50%, -50%); }
+.mark-size { position: absolute; top: -30px; left: 50%; padding: 0 6px; color: var(--toast-text); background: var(--toast-bg); border-radius: 4px; font-size: 11px; font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
 
 /* No transform animation: Vue Flow measures the point right after a node style change, and measuring mid-animation shifted the connector. */
 .node-handle { width: 8px; height: 8px; background: var(--surface); border: 2px solid var(--branch); opacity: 0; transition: opacity .15s; }

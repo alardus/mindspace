@@ -94,3 +94,17 @@ test('select all targets every visible canvas block', () => {
   shortcuts.selectAllCanvasNodes?.(nodes)
   assert.deepEqual(nodes.map((node) => node.selected), [true, false])
 })
+
+test('icon keys are bare: digits and I, never with a modifier', () => {
+  assert.equal(findShortcut(key({ key: 'i', code: 'KeyI' }))?.id, 'marks')
+  // Shift+I and Cmd+I stay free: a capital letter starts a title, Cmd+I belongs to the browser.
+  assert.equal(findShortcut(key({ key: 'I', code: 'KeyI', shiftKey: true })), undefined)
+  assert.equal(findShortcut(key({ key: 'i', code: 'KeyI', metaKey: true })), undefined)
+  for (const digit of '1234567890') assert.equal(findShortcut(key({ key: digit }))?.id, 'mark')
+  assert.equal(findShortcut(key({ key: '1', ctrlKey: true })), undefined)
+  assert.equal(findShortcut(key({ key: '1', altKey: true })), undefined)
+  assert.equal(findShortcut(key({ key: '!', code: 'Digit1', shiftKey: true })), undefined)
+  assert.equal(findShortcut(key({ key: 'd', metaKey: true }))?.id, 'duplicateMark')
+  assert.deepEqual(shortcutGroups(true).find((group) => group.title === 'Icons').items.map((item) => item.id),
+    ['marks', 'mark', 'markStep', 'markRemove', 'duplicateMark'])
+})

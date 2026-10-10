@@ -5,6 +5,8 @@ import {
   DEFAULT_SIZE,
   LIBRARY_STORAGE_KEY,
   LINK_ANCHORS,
+  MARKS,
+  MARK_SIZE,
   MAX_LABEL_LENGTH,
   PALETTES,
   STORAGE_KEY,
@@ -20,6 +22,7 @@ import {
   linkParts,
   makeEdge,
   makeNode,
+  markName,
   mergeImageNode,
   nextMatch,
   nodeInDirection,
@@ -40,6 +43,7 @@ import {
   referencedAssetIds,
   reparentBranches,
   relativeTime,
+  resizeFreeMark,
   rigidRootBranch,
   searchOrder,
   selectedBranchRoots,
@@ -48,6 +52,7 @@ import {
   starterMap,
   toMarkdown,
   toOpml,
+  toggleMark,
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
@@ -63,6 +68,7 @@ import {
   translateClipboardFragment,
 } from './clipboard.js'
 import Logo from './Logo.vue'
+import MarkIcon from './MarkIcon.vue'
 import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
@@ -94,6 +100,11 @@ const settings = ref(normalizeSettings(initial.settings))
 const nodes = ref(initial.nodes)
 let pendingLayoutInitial = Boolean(initial.needsLayout)
 const edges = ref(initial.edges)
+const freeMarks = ref(initial.freeMarks ?? [])
+const selectedMarkId = ref(null)
+const marksOpen = ref(false)
+const marksWrap = ref(null)
+const hoveredMark = ref(null)
 const editingId = ref(null)
 const editDraft = ref({ label: '', note: '' })
 const dropTargetId = ref(null)
@@ -367,6 +378,7 @@ function cleanMap() {
           naturalWidth: node.data.image.naturalWidth,
           naturalHeight: node.data.image.naturalHeight,
         } } : {}),
+        ...(node.data.marks?.length ? { marks: [...node.data.marks] } : {}),
       },
     })),
     edges: edges.value.map((edge) => ({
@@ -379,6 +391,7 @@ function cleanMap() {
       targetHandle: edge.targetHandle,
       data: { kind: edge.data?.kind === 'link' ? 'link' : 'tree' },
     })),
+    ...(freeMarks.value.length ? { freeMarks: freeMarks.value.map((mark) => ({ ...mark })) } : {}),
   }
 }
 
@@ -400,6 +413,7 @@ function openMap(map) {
   settings.value = normalized.settings
   nodes.value = normalized.nodes
   edges.value = normalized.edges
+  freeMarks.value = normalized.freeMarks ?? []
   editingId.value = null
   contextMenu.value = null
   applyVisibility()
@@ -964,7 +978,9 @@ let searchTimer
 let revealCamera = null
 let revealUntil = 0
 
-const searchIndex = computed(() => new Map(nodes.value.map((node) => [node.id, normalizeSearch(`${node.data.label}\n${node.data.note}`)])))
+// Icon names are searchable too: “done” finds every node marked Done.
+const searchIndex = computed(() => new Map(nodes.value.map((node) => [node.id,
+  normalizeSearch([node.data.label, node.data.note, ...(node.data.marks ?? []).map(markName)].join('\n'))])))
 const searchOrderIds = computed(() => searchOrder(nodes.value, edges.value))
 const searchMatches = computed(() => {
   const term = searchTerm.value
@@ -1499,13 +1515,169 @@ function showNodeMenu({ event, node }) {
     x: Math.min(event.clientX, window.innerWidth - 230),
     y: Math.min(event.clientY, window.innerHeight - 230),
     id: node.id,
+    mark: event.target.closest?.('[data-mark]')?.dataset.mark,
   }
 }
 
 function closeOverlays() {
   contextMenu.value = null
+  selectedMarkId.value = null
   finishEditing()
 }
+
+// Icon marks (8a, 8b). On nodes they live in node.data.marks; free marks are their own list, outside layout and Vue Flow.
+const selectedMark = computed(() => freeMarks.value.find((mark) => mark.id === selectedMarkId.value))
+const markActive = (id) => (selectedCount.value
+  ? selectedNodes.value.every((node) => node.data.marks?.includes(id))
+  : selectedMark.value?.mark === id)
+const markTarget = computed(() => (selectedCount.value > 1 ? `on ${pluralNodes(selectedCount.value)}`
+  : primaryNode.value ? `on “${nodeLabel(primaryNode.value)}”`
+  : selectedMark.value ? 'replace mark' : 'on canvas'))
+const MARK_CORNERS = [[-1, -1], [1, -1], [-1, 1], [1, 1]]
+// The frame and its handles are screen-sized: they follow the mark but do not scale with the zoom.
+const markFrame = computed(() => {
+  const mark = selectedMark.value
+  if (!mark) return null
+  const { x, y, zoom } = viewport.value
+  const side = `${mark.size * zoom + 10}px`
+  return { left: `${mark.x * zoom + x - 5}px`, top: `${mark.y * zoom + y - 5}px`, width: side, height: side }
+})
+// The set opens under its button. It slides left when it would cover the selected node, and stays 12px inside the window.
+const marksShift = computed(() => {
+  const wrap = marksWrap.value
+  if (!marksOpen.value || !wrap) return 0
+  const right = dimensions.value.width - (inspectorOpen.value ? INSPECTOR_SPACE : 12)
+    - (topRight.value.offsetWidth - wrap.offsetLeft - wrap.offsetWidth)
+  const left = right - 252
+  const node = selectedCount.value === 1 ? primaryNode.value : null
+  const { x, y, zoom } = viewport.value
+  const nodeLeft = node ? node.position.x * zoom + x : 0
+  const nodeTop = node ? node.position.y * zoom + y : 0
+  // 62px is the top of the set, 180px its height with room to spare.
+  const covered = node && nodeLeft < right && nodeLeft + (node.dimensions?.width || DEFAULT_SIZE.width) * zoom > left
+    && nodeTop < 62 + 180 && nodeTop + (node.dimensions?.height || DEFAULT_SIZE.height) * zoom > 62
+  return Math.min(covered ? right - nodeLeft + 12 : 0, left - 12)
+})
+
+function toggleMarks() {
+  closeMenus()
+  marksOpen.value = !marksOpen.value
+}
+
+// The set stays open while you work on the canvas; a click anywhere else closes it.
+function onWindowPointerDown(event) {
+  if (marksOpen.value && !event.target.closest?.('.mark-wrap, .mind-flow, .mark-frame')) marksOpen.value = false
+}
+
+function onMarkGridKeydown(event) {
+  const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -5, ArrowDown: 5 }[event.key]
+  if (!step) return
+  event.preventDefault()
+  const cells = [...event.currentTarget.children]
+  cells[cells.indexOf(document.activeElement) + step]?.focus()
+}
+
+function selectMark(id) {
+  clearSelection()
+  for (const edge of edges.value) edge.selected = false
+  selectedMarkId.value = id
+}
+
+// A new mark never lands on another one, nor under a node where it could not be seen or grabbed:
+// it steps down and right until its spot is free.
+function addFreeMark(mark) {
+  const taken = () => freeMarks.value.some((other) => Math.abs(other.x - mark.x) < 1 && Math.abs(other.y - mark.y) < 1)
+    || nodes.value.some((node) => !node.hidden
+      && pointRectDistance({ x: mark.x + mark.size / 2, y: mark.y + mark.size / 2 }, {
+        ...node.position,
+        width: node.dimensions?.width || DEFAULT_SIZE.width,
+        height: node.dimensions?.height || DEFAULT_SIZE.height,
+      }) < mark.size / 2)
+  while (taken()) {
+    mark.x += 16
+    mark.y += 16
+  }
+  freeMarks.value.push({ ...mark, id: documentId() })
+  selectMark(freeMarks.value.at(-1).id)
+}
+
+// A key or a click in the set: toggles the icon on the selected nodes, swaps it on the selected free mark,
+// or drops a new mark in the middle of the visible canvas.
+function applyMark(id) {
+  const before = snapshot()
+  if (selectedCount.value) toggleMark(selectedNodes.value.filter((node) => node.data.label), id)
+  else if (selectedMark.value) selectedMark.value.mark = id
+  else {
+    const { x, y, zoom } = viewport.value
+    const visible = dimensions.value.width - (inspectorOpen.value ? INSPECTOR_SPACE : 0)
+    addFreeMark({
+      mark: id,
+      x: (visible / 2 - x) / zoom - MARK_SIZE.initial / 2,
+      y: (dimensions.value.height / 2 - y) / zoom - MARK_SIZE.initial / 2,
+      size: MARK_SIZE.initial,
+    })
+  }
+  record(before)
+}
+
+function removeNodeMark(nodeId, id) {
+  const before = snapshot()
+  toggleMark([nodesById.value.get(nodeId)], id)
+  record(before)
+  contextMenu.value = null
+}
+
+function removeFreeMark() {
+  const before = snapshot()
+  freeMarks.value = freeMarks.value.filter((mark) => mark.id !== selectedMarkId.value)
+  record(before)
+}
+
+function duplicateFreeMark() {
+  const before = snapshot()
+  const { mark, x, y, size } = selectedMark.value
+  addFreeMark({ mark, x: x + 16, y: y + 16, size })
+  record(before)
+}
+
+// One pointer gesture on a free mark — a move or a corner resize — is one undo step, recorded on release.
+function dragFreeMark(event, mark, update) {
+  const before = snapshot()
+  const origin = { ...mark }
+  let dragging = false
+  const move = (moved) => {
+    const dx = moved.clientX - event.clientX
+    const dy = moved.clientY - event.clientY
+    // A click with a little jitter moves nothing.
+    if (!dragging && Math.hypot(dx, dy) < 4) return
+    dragging = true
+    Object.assign(mark, update(origin, dx / viewport.value.zoom, dy / viewport.value.zoom, moved))
+  }
+  const stop = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
+    record(before)
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop)
+  window.addEventListener('pointercancel', stop)
+}
+
+function onMarkPointerDown(event, mark) {
+  if (event.button) return
+  selectMark(mark.id)
+  dragFreeMark(event, mark, (origin, dx, dy) => ({ x: origin.x + dx, y: origin.y + dy }))
+}
+
+function onMarkHandleDown(event, sx, sy) {
+  dragFreeMark(event, selectedMark.value, (origin, dx, dy, moved) => resizeFreeMark(origin, sx, sy, dx, dy, moved.shiftKey ? 8 : 1))
+}
+
+// Picking a node lets go of the free mark, and the other way round.
+watch(selectedCount, (count) => {
+  if (count) selectedMarkId.value = null
+})
 
 function persistDocuments(showState = true) {
   const current = activeDocument.value
@@ -2041,7 +2213,10 @@ function runShortcut(id, event) {
     case 'addChild': return addChild()
     case 'addSibling': return addSibling()
     case 'navigate': return navigateNodes(event.key)
-    case 'remove': return removeSelected()
+    case 'remove': return selectedMark.value ? removeFreeMark() : removeSelected()
+    case 'marks': return toggleMarks()
+    case 'mark': return applyMark(MARKS.find((mark) => mark.key === event.key).id)
+    case 'duplicateMark': return duplicateFreeMark()
     case 'collapse':
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
     case 'help': return openHelp(event.target)
@@ -2051,6 +2226,7 @@ function runShortcut(id, event) {
       contextMenu.value = null
       closeMenus()
       for (const node of nodes.value) node.selected = false
+      selectedMarkId.value = null
   }
 }
 
@@ -2073,6 +2249,13 @@ function onKeydown(event) {
     openSearch()
     return
   }
+  if (event.key === 'Escape' && marksOpen.value) {
+    // Only the set closes: Vue Flow must not see the key and deselect the focused node.
+    event.preventDefault()
+    event.stopPropagation()
+    marksOpen.value = false
+    return
+  }
   if (event.key === 'Escape' && searchOpen.value && !contextMenu.value && !documentsOpen.value && !appMenuOpen.value && !exportOpen.value) {
     event.preventDefault()
     closeSearch()
@@ -2083,8 +2266,11 @@ function onKeydown(event) {
     undoDeletion()
     return
   }
-  // Keys inside the menu must not edit the map on the canvas.
-  if (event.key !== 'Escape' && target instanceof Element && target.closest('.island, .island-menu, .row-menu, .app-menu, .undo-toast')) return
+  // Keys inside the menu must not edit the map on the canvas; the icon set still takes its own keys.
+  if (event.key !== 'Escape' && target instanceof Element && target.closest('.island, .island-menu, .row-menu, .app-menu, .undo-toast')
+    && !(target.closest('.mark-wrap') && (shortcut?.id === 'marks' || shortcut?.id === 'mark'))) return
+  // Without a selected mark Cmd+D stays with the browser.
+  if (shortcut?.id === 'duplicateMark' && !selectedMark.value) return
   if (shortcut) {
     if (shortcut.id !== 'deselect') event.preventDefault()
     // Vue Flow uses arrow keys to move selected nodes. Navigation owns these
@@ -2184,6 +2370,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('keyup', onLinkModifierKeyup)
   window.addEventListener('blur', clearLinkModifier)
+  window.addEventListener('pointerdown', onWindowPointerDown)
   window.addEventListener('copy', onCopy)
   window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
@@ -2208,6 +2395,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('keyup', onLinkModifierKeyup)
   window.removeEventListener('blur', clearLinkModifier)
+  window.removeEventListener('pointerdown', onWindowPointerDown)
   window.removeEventListener('copy', onCopy)
   window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
@@ -2256,8 +2444,19 @@ onBeforeUnmount(() => {
           @node-drag-stop="onNodeDragStop"
           @node-double-click="({ node }) => focusEditor(node.id)"
           @node-context-menu="showNodeMenu"
+          @edge-click="selectedMarkId = null"
           @pane-click="closeOverlays"
         >
+          <template #zoom-pane>
+            <div
+              v-for="mark in freeMarks"
+              :key="mark.id"
+              class="free-mark nopan"
+              :style="{ left: `${mark.x}px`, top: `${mark.y}px`, width: `${mark.size}px`, height: `${mark.size}px` }"
+              @pointerdown="onMarkPointerDown($event, mark)"
+            ><MarkIcon :id="mark.mark" :size="mark.size" /></div>
+          </template>
+
           <template #edge-branch="edge">
             <g class="branch-edge" :class="{ 'search-path': searchMarks.has(edge.target) }">
               <BaseEdge :id="edge.id" :path="branchPath(edge)" :style="edge.style" :interaction-width="12" />
@@ -2314,19 +2513,22 @@ onBeforeUnmount(() => {
                 @dblclick.stop
                 @focusout="onEditorFocusOut"
               >
-                <textarea
-                  v-model="editDraft.label"
-                  :data-editor="id"
-                  class="node-title"
-                  name="node-text"
-                  rows="1"
-                  :maxlength="MAX_LABEL_LENGTH"
-                  aria-label="Node title"
-                  @keydown.enter.exact.prevent="finishEditing()"
-                  @keydown.shift.enter.prevent="focusNoteEditor(id)"
-                  @keydown.tab.exact.prevent="focusNoteEditor(id)"
-                  @keydown.esc.prevent="finishEditing(false)"
-                ></textarea>
+                <div class="node-head">
+                  <MarkIcon v-for="mark in data.marks" :id="mark" :key="mark" />
+                  <textarea
+                    v-model="editDraft.label"
+                    :data-editor="id"
+                    class="node-title"
+                    name="node-text"
+                    rows="1"
+                    :maxlength="MAX_LABEL_LENGTH"
+                    aria-label="Node title"
+                    @keydown.enter.exact.prevent="finishEditing()"
+                    @keydown.shift.enter.prevent="focusNoteEditor(id)"
+                    @keydown.tab.exact.prevent="focusNoteEditor(id)"
+                    @keydown.esc.prevent="finishEditing(false)"
+                  ></textarea>
+                </div>
                 <input
                   v-model="editDraft.note"
                   :data-note-editor="id"
@@ -2341,17 +2543,20 @@ onBeforeUnmount(() => {
                 />
               </div>
               <template v-else>
-                <span v-if="data.label" class="node-title"><component
-                  :is="part.href ? 'a' : 'span'"
-                  v-for="(part, index) in displayParts(id, blockPreview(data.label))"
-                  :key="index"
-                  :class="{ 'node-link': part.href, nodrag: part.href }"
-                  :href="part.href"
-                  :target="part.href ? '_blank' : undefined"
-                  :rel="part.href ? 'noopener' : undefined"
-                  :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
-                  @click="part.href && onTextLinkClick($event)"
-                ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                <div v-if="data.label" class="node-head">
+                  <MarkIcon v-for="mark in data.marks" :id="mark" :key="mark" :data-mark="mark" />
+                  <span class="node-title"><component
+                    :is="part.href ? 'a' : 'span'"
+                    v-for="(part, index) in displayParts(id, blockPreview(data.label))"
+                    :key="index"
+                    :class="{ 'node-link': part.href, nodrag: part.href }"
+                    :href="part.href"
+                    :target="part.href ? '_blank' : undefined"
+                    :rel="part.href ? 'noopener' : undefined"
+                    :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
+                    @click="part.href && onTextLinkClick($event)"
+                  ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                </div>
                 <span v-if="data.note" class="node-note"><component
                   :is="part.href ? 'a' : 'span'"
                   v-for="(part, index) in displayParts(id, data.note)"
@@ -2620,6 +2825,44 @@ onBeforeUnmount(() => {
 
         <div ref="topRight" class="top-right" @click.stop>
           <div class="island action-island">
+            <div ref="marksWrap" class="mark-wrap">
+              <button
+                class="island-icon mark-toggle"
+                :class="{ active: marksOpen }"
+                :aria-expanded="marksOpen"
+                :title="`Icons · ${keysLabel('marks')}`"
+                aria-label="Icons"
+                @click="toggleMarks"
+              >
+                <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><path d="M5.6 9.5a2.8 2.8 0 004.8 0M6 6.5h.01M10 6.5h.01"/></svg>
+              </button>
+              <Transition name="marks">
+                <div v-if="marksOpen" class="mark-popover" role="dialog" aria-label="Icons" :style="{ right: `${marksShift}px` }">
+                  <header>
+                    <strong>Icons</strong>
+                    <span>{{ markTarget }}</span>
+                  </header>
+                  <div class="mark-grid" @keydown="onMarkGridKeydown" @mouseleave="hoveredMark = null">
+                    <button
+                      v-for="mark in MARKS"
+                      :key="mark.id"
+                      :class="{ active: markActive(mark.id) }"
+                      :aria-pressed="markActive(mark.id)"
+                      :title="`${mark.name} · ${mark.key}`"
+                      @click="applyMark(mark.id)"
+                      @mouseenter="hoveredMark = mark"
+                      @focus="hoveredMark = mark"
+                      @blur="hoveredMark = null"
+                    ><MarkIcon :id="mark.id" :size="24" /></button>
+                  </div>
+                  <hr />
+                  <footer :class="{ idle: !hoveredMark }">
+                    <span>{{ hoveredMark ? `${hoveredMark.name} — ${hoveredMark.hint}` : 'Keys 1–0 add and remove' }}</span>
+                    <kbd>{{ hoveredMark?.key ?? '1' }}</kbd>
+                  </footer>
+                </div>
+              </Transition>
+            </div>
             <button
               class="island-icon search-toggle"
               :class="{ active: searchOpen }"
@@ -2662,6 +2905,17 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <input ref="fileInput" class="visually-hidden" name="map-file" aria-label="Open map file" type="file" accept=".mindmap,.json,.opml,.md,.markdown,application/json,text/xml,text/markdown" @change="loadFile" />
+
+        <div v-if="markFrame" class="mark-frame" :style="markFrame">
+          <span class="mark-size">{{ selectedMark.size }} px</span>
+          <i
+            v-for="[sx, sy] in MARK_CORNERS"
+            :key="`${sx}${sy}`"
+            class="mark-handle"
+            :style="{ left: sx < 0 ? 0 : '100%', top: sy < 0 ? 0 : '100%', cursor: sx === sy ? 'nwse-resize' : 'nesw-resize' }"
+            @pointerdown.prevent="onMarkHandleDown($event, sx, sy)"
+          ></i>
+        </div>
 
         <svg v-if="alignmentGuides.length || dragPreview?.mode === 'attach'" class="drag-preview" aria-hidden="true">
           <g :transform="`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`">
@@ -2862,6 +3116,10 @@ onBeforeUnmount(() => {
       </aside>
 
       <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }">
+        <template v-if="contextMenu.mark">
+          <button @click="removeNodeMark(contextMenu.id, contextMenu.mark)"><span>✕</span>Remove “{{ markName(contextMenu.mark) }}”</button>
+          <hr />
+        </template>
         <button @click="addChild(contextMenu.id)"><span>＋</span>Child node <kbd>{{ keysLabel('addChild') }}</kbd></button>
         <button @click="addSibling"><span>↳</span>Sibling node <kbd>{{ keysLabel('addSibling') }}</kbd></button>
         <button @click="focusEditor(contextMenu.id); contextMenu = null"><span>✎</span>{{ imageOnly(nodes.find((node) => node.id === contextMenu.id)) ? 'Preview' : 'Edit' }}</button>

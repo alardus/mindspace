@@ -31,6 +31,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 - **Copy and paste.** Copy complete branches between maps, paste outlines from XMind, Miro, MindNode, or Coggle, or paste plain text as one independent root block.
 - **Images.** Paste or drop PNG, JPEG, WebP, or GIF files up to 10 MB onto the canvas, as a block of their own or inside a node.
 - **Auto layout.** Branches to the right, on both sides, or as a tree, with smooth or straight lines and adjustable spacing. Turn it off to place nodes by hand.
+- **Icon marks.** Ten fixed icons (Important, Question, Done, Idea, and more) to put on a node with `1`–`0`, or to drop on the canvas as a free mark you can move and resize.
 - **Branch palettes.** Bright, Calm, or Mono, plus per-branch colors inherited by children.
 - **Light and dark themes.** Follows your system or set manually; branch colors adapt to each theme.
 - **Import and export.** `.mindmap` files for backups (images included), plus OPML and Markdown outlines.
@@ -51,6 +52,7 @@ Most mind-map tools are either cloud editors with accounts and paywalls, or desk
 | Paste on canvas | `⌘` `V` |
 | Move between nodes | `←` `↑` `→` `↓` |
 | Collapse / expand branch | `⌥` `←` / `⌥` `→` |
+| Icon set / add or remove an icon | `I` / `1`–`0` |
 | Search | `⌘` `F` |
 | Pan / zoom | `Space` drag / `⌘` wheel |
 | Undo / redo | `⌘` `Z` / `⇧` `⌘` `Z` |
@@ -98,6 +100,7 @@ Where things are:
 
 - `src/App.vue`: the app UI: canvas, toolbars, inspector, menus, and dialogs.
 - `src/model.js`: the map model: normalization, layout, palettes, OPML/Markdown, and the welcome map.
+- `src/MarkIcon.vue`: the icon marks drawn on nodes, in the icon set, and on the canvas.
 - `src/assets.js`, `src/archive.js`: local image storage and `.mindmap` archives.
 - `src/shortcuts.js`: the shortcut registry behind the key handlers and the help dialog.
 - `src/style.css`: styles and theme tokens.
