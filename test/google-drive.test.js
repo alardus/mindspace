@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  DRIVE_ENABLED, DRIVE_MIME, MULTIPART_LIMIT, acceptToken, createFile, folderLabel, forgetToken, getMetadata, hasToken, updateFile, uploadMode,
+  DRIVE_ENABLED, DRIVE_MIME, MULTIPART_LIMIT, acceptToken, createFile, ensureFolder, folderLabel, forgetToken, getMetadata, hasToken, pickFile, signIn,
+  updateFile, uploadMode,
 } from '../src/google-drive.js'
 
 const FIELDS = 'id,name,version,md5Checksum,appProperties,trashed,capabilities(canEdit),parents'
@@ -119,4 +120,89 @@ test('the folder label is only given for the Mindspace folder and never throws',
   assert.equal(await folderLabel('label-gone'), '')
   assert.equal(await folderLabel(undefined), '')
   assert.equal(calls.length, 3)
+})
+
+// Google's sign-in and picker as the page sees them. With the globals in place nothing is loaded from the network.
+function stubGoogle(t, { signIn: answer, pick } = {}) {
+  const seen = { prompts: [] }
+  globalThis.google = {
+    accounts: { oauth2: { initTokenClient: (config) => ({
+      requestAccessToken: (options) => {
+        seen.prompts.push(options.prompt)
+        seen.scope = config.scope
+        queueMicrotask(() => answer(config))
+      },
+    }) } },
+    picker: {
+      ViewId: { DOCS: 'docs' },
+      DocsViewMode: { LIST: 'list' },
+      Action: { PICKED: 'picked', CANCEL: 'cancel' },
+      DocsView: class { setMimeTypes(types) { seen.mimeTypes = types; return this } setMode() { return this } },
+      PickerBuilder: class {
+        setAppId() { return this } setDeveloperKey() { return this } addView() { return this }
+        setOAuthToken(token) { seen.token = token; return this }
+        setCallback(callback) { this.callback = callback; return this }
+        build() { return { setVisible: () => queueMicrotask(() => pick(this.callback)) } }
+      },
+    },
+  }
+  t.after(() => {
+    delete globalThis.google
+    forgetToken()
+  })
+  return seen
+}
+
+test('signing in takes the token; a closed or blocked window is told apart from a failure', async (t) => {
+  let answer = (config) => config.callback({ access_token: 't1', expires_in: 3600 })
+  const seen = stubGoogle(t, { signIn: (config) => answer(config) })
+  forgetToken()
+  await signIn()
+  assert.equal(hasToken(), true)
+  assert.equal(seen.scope, 'https://www.googleapis.com/auth/drive.file')
+  await signIn({ chooseAccount: true })
+  assert.deepEqual(seen.prompts, ['', 'select_account'])
+
+  forgetToken()
+  answer = (config) => config.error_callback({ type: 'popup_closed' })
+  await assert.rejects(signIn(), { name: 'DriveError', kind: 'cancelled' })
+  answer = (config) => config.error_callback({ type: 'popup_failed_to_open' })
+  await assert.rejects(signIn(), { kind: 'blocked' })
+  answer = (config) => config.error_callback({ type: 'unknown' })
+  await assert.rejects(signIn(), { kind: 'failed' })
+  // The user pressed Cancel on Google's consent screen.
+  answer = (config) => config.callback({ error: 'access_denied' })
+  await assert.rejects(signIn(), { kind: 'cancelled' })
+  assert.equal(hasToken(), false)
+})
+
+test('the picker gives the chosen file, or nothing when it is closed', async (t) => {
+  let pick = (callback) => {
+    callback({ action: 'loaded' })
+    callback({ action: 'picked', docs: [{ id: 'f1', name: 'Plan.mindmap', mimeType: DRIVE_MIME }] })
+  }
+  const seen = stubGoogle(t, { pick: (callback) => pick(callback) })
+  forgetToken()
+  await assert.rejects(pickFile(), { status: 401 })
+  acceptToken({ access_token: 't1', expires_in: 3600 })
+  assert.deepEqual(await pickFile(), { id: 'f1', name: 'Plan.mindmap' })
+  assert.equal(seen.token, 't1')
+  assert.ok(seen.mimeTypes.split(',').includes(DRIVE_MIME))
+  pick = (callback) => callback({ action: 'cancel' })
+  assert.equal(await pickFile(), null)
+})
+
+test('the Mindspace folder is found by its private mark, and created only when there is none', async (t) => {
+  let found = [{ id: 'dir', name: 'Renamed by the user' }]
+  const calls = stubFetch(t, (url, init) => (init.method === 'POST' ? json({ id: 'new-dir', name: 'Mindspace' }) : json({ files: found })))
+  acceptToken({ access_token: 't', expires_in: 3600 })
+  assert.deepEqual(await ensureFolder(), { id: 'dir', name: 'Renamed by the user' })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url.origin + calls[0].url.pathname, 'https://www.googleapis.com/drive/v3/files')
+  assert.equal(calls[0].url.searchParams.get('q'), "appProperties has { key='mindspaceFolder' and value='v1' } and mimeType='application/vnd.google-apps.folder' and trashed=false")
+  found = []
+  assert.deepEqual(await ensureFolder(), { id: 'new-dir', name: 'Mindspace' })
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2].method, 'POST')
+  assert.deepEqual(JSON.parse(calls[2].body), { name: 'Mindspace', mimeType: 'application/vnd.google-apps.folder', appProperties: { mindspaceFolder: 'v1' } })
 })

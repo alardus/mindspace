@@ -14,14 +14,20 @@ export const backupFileName = (title) => `${String(title ?? '').trim() || 'Untit
 // Compares the Drive file with the baseline of the last upload or restore. A rename, move or other metadata-only
 // change is fine; different content or a save made by another device is not. Without a baseline (the user asked
 // to overwrite the file) only a trashed or read-only file stops the write.
+const saveIdOf = (meta) => meta.appProperties?.mindspaceSaveId ?? ''
+
 export function remoteCheck(backup, meta) {
   if (meta.trashed) return 'trashed'
   if (meta.capabilities?.canEdit === false) return 'readonly'
   if (!backup) return 'ok'
-  const sameContent = meta.md5Checksum === backup.md5Checksum
-  const sameLineage = (meta.appProperties?.mindspaceSaveId ?? '') === backup.saveId
-  return sameContent && sameLineage ? 'ok' : 'conflict'
+  const saveId = saveIdOf(meta)
+  // A save of ours that reached Drive although its confirmation never reached the page (closed tab, dropped connection).
+  if (backup.sentSaveId && saveId === backup.sentSaveId) return 'ok'
+  return meta.md5Checksum === backup.md5Checksum && saveId === backup.saveId ? 'ok' : 'conflict'
 }
+
+// The first look at a map in a session only takes the mark to compare with — unless the caller made the edit itself.
+export const isBackupEdit = (seen, key, certain = false) => seen !== key && (seen !== undefined || certain)
 
 const QUOTA_REASONS = ['storageQuotaExceeded', 'teamDriveFileLimitExceeded']
 const READONLY_REASONS = ['insufficientFilePermissions', 'appNotAuthorizedToFile']
@@ -54,6 +60,37 @@ export function backupUi(backup, session) {
   if (backup.state === 'conflict') return 'conflict'
   return session?.status ?? 'saved'
 }
+
+// What one upload attempt does to a linked map: the link to keep (null lets it go), the session status, the toast
+// its change of state calls for (none while the state stays the same), and whether the sign-in is to be forgotten.
+export function backupTransition(backup, status, result, editedSince = false) {
+  const missing = status?.missing ? { missing: true } : {}
+  let next = { backup, status: { status: 'failed' } }
+  let forgetToken = false
+  if (result.outcome === 'saved') {
+    // An edit made while the upload was on its way still waits for the next one.
+    next = { backup: editedSince ? { ...result.backup, pending: true } : result.backup, status: null }
+  } else if (result.outcome === 'conflict') next = { backup: { ...backup, state: 'conflict' }, status: null }
+  else if (result.outcome === 'trashed' || (result.outcome === 'missing' && status?.missing)) next = { backup: null, status: null }
+  else if (result.outcome === 'missing') {
+    // Maybe just another Google account: ask to sign in once more, afresh, before letting the link go.
+    next.status = { status: 'auth', missing: true }
+    forgetToken = true
+  } else if (result.outcome === 'auth') next.status = { status: 'auth', ...missing }
+  else if (result.outcome === 'readonly' || result.outcome === 'offline') next.status = { status: result.outcome }
+  else if (result.outcome === 'quota') next.status = { status: 'failed', reason: 'quota' }
+  const after = backupUi(next.backup ?? undefined, next.status)
+  const toast = after === backupUi(backup, status) ? null : ({ off: 'removed', conflict: 'conflict', auth: 'auth' }[after] ?? null)
+  return { ...next, toast, forgetToken }
+}
+
+// After a sign-in: every linked map that was paused for it or still has an edit to send.
+export const resumesOnSignIn = (backup, status) => backup?.state === 'linked' && (status?.status === 'auth' || Boolean(backup.pending))
+
+// When the network or the user is back: a map that waited for the network, and a map with an edit that nobody
+// is sending and no state explains (e.g. deleted during its wait and brought back with Undo).
+export const retriesWhenBack = (backup, status, busy) => backup?.state === 'linked'
+  && (status?.status === 'offline' || (Boolean(backup.pending) && !status && !busy))
 
 // tone colors the status dot and text; badge puts the mark on the toolbar cloud; label is the cloud's title;
 // say is read out once when the state is entered; alert is the block that asks for a reaction.
@@ -151,8 +188,6 @@ export function createBackupQueue(run, delay = BACKUP_DELAY) {
   return { schedule, now, busy: (id) => Boolean(jobs.get(id)?.running || jobs.get(id)?.timer) }
 }
 
-const saveIdOf = (meta) => meta.appProperties?.mindspaceSaveId ?? ''
-
 // What gets persisted with the map: the link, the state of the Drive file to compare against next time,
 // and what the Storage block shows without asking Drive.
 async function baseline(drive, meta, now) {
@@ -170,13 +205,17 @@ async function baseline(drive, meta, now) {
 
 // Every write carries a new save id and the id it replaces. Drive has no compare-and-swap for file content, so the
 // file is read back: a save id that is no longer ours means another device wrote in between.
-async function write(drive, fileId, { title, blob, parentSaveId, now }) {
+// beforeWrite gets the new id while nothing is sent yet, so it can be stored with the map.
+async function write(drive, fileId, { title, blob, parentSaveId, now, beforeWrite }) {
   const saveId = globalThis.crypto.randomUUID()
+  beforeWrite?.(saveId)
   const appProperties = { mindspaceSaveId: saveId, mindspaceParentSaveId: parentSaveId, mindspaceFormat: 'mindmap' }
   const written = fileId
     ? await drive.updateFile(fileId, { blob, appProperties })
     : await drive.createFile({ name: backupFileName(title), folderId: (await drive.ensureFolder()).id, blob, appProperties })
-  const meta = await drive.getMetadata(written.id)
+  // If the read-back fails (the sign-in ran out, the network dropped), the answer to the write itself is the baseline:
+  // the bytes are in Drive, and not knowing our own save would report it as someone else's next time.
+  const meta = await drive.getMetadata(written.id).catch(() => written)
   if (saveIdOf(meta) !== saveId) return { outcome: 'conflict' }
   return { outcome: 'saved', backup: await baseline(drive, meta, now) }
 }
@@ -189,11 +228,11 @@ export async function createBackup(drive, { title, blob, now = Date.now() }) {
 }
 
 // The regular upload: only onto the file as this device last left it.
-export async function pushBackup(drive, backup, { blob, now = Date.now() }) {
+export async function pushBackup(drive, backup, { blob, now = Date.now(), beforeWrite }) {
   const meta = await drive.getMetadata(backup.fileId)
   const check = remoteCheck(backup, meta)
   if (check !== 'ok') return { outcome: check }
-  return write(drive, backup.fileId, { blob, parentSaveId: backup.saveId, now })
+  return write(drive, backup.fileId, { blob, parentSaveId: saveIdOf(meta), now, beforeWrite })
 }
 
 // The user confirmed replacing this file with the local map, whatever it holds.

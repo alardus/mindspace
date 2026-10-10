@@ -62,7 +62,10 @@ import {
   toggleMark,
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
-import { BACKUP_VIEW, DRIVE_MESSAGES, backupKey, backupUi, createBackup, createBackupQueue, errorKind, linkedDocument, pushBackup, replaceBackup, restoreBackup } from './backup.js'
+import {
+  BACKUP_VIEW, DRIVE_MESSAGES, backupKey, backupTransition, backupUi, createBackup, createBackupQueue, errorKind, isBackupEdit, linkedDocument, pushBackup,
+  replaceBackup, restoreBackup, resumesOnSignIn, retriesWhenBack,
+} from './backup.js'
 import * as drive from './google-drive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
 import {
@@ -489,14 +492,19 @@ function redo() {
 }
 
 // dot and action make it a status toast (10c): the look of the Undo toast, six seconds, an optional action on the right.
-function notify(message, { duration = 2600, tip = false, dot = '', action = null, about = null } = {}) {
+// background: raised by the app on its own, not in answer to what the user just did. Such a toast must not cut short
+// what the user is in the middle of — the Undo of a deleted map, a click that may become a double-click. While the
+// Undo toast is up it waits behind it.
+function notify(message, { duration = 2600, tip = false, dot = '', action = null, about = null, background = false } = {}) {
   toast.value = message
   toastTip.value = tip || Boolean(dot)
   toastDot.value = dot
   toastAction.value = action
   toastAbout = about
-  clearTimeout(rowClickTimer)
-  finalizeDeletion()
+  if (!background) {
+    clearTimeout(rowClickTimer)
+    finalizeDeletion()
+  }
   startToastTimer(dot ? 6000 : duration)
 }
 
@@ -2059,7 +2067,7 @@ function noteBackupEdit(document, certain = false) {
   const key = backupKey(document.map)
   const seen = backupKeys.get(document.id)
   backupKeys.set(document.id, key)
-  if (seen === key || (seen === undefined && !certain)) return
+  if (!isBackupEdit(seen, key, certain)) return
   backup.pending = true
   if (backup.state === 'linked') enqueueBackup(document.id)
 }
@@ -2076,8 +2084,8 @@ function enqueueBackup(id, immediate = false) {
   }, 600)
 }
 
-function setDriveStatus(id, status, extra = {}) {
-  if (status) driveStatus[id] = { status, ...extra }
+function setDriveStatus(id, status) {
+  if (status) driveStatus[id] = status
   else delete driveStatus[id]
 }
 
@@ -2097,7 +2105,14 @@ async function runBackup(id) {
   let result
   try {
     result = drive.hasToken()
-      ? await pushBackup(drive, backup, { blob: await createMindmapFile(map, loadImageAsset) })
+      ? await pushBackup(drive, backup, {
+        blob: await createMindmapFile(map, loadImageAsset),
+        // Stored before the bytes go out: if the page closes mid-upload, the save that landed is still known as ours.
+        beforeWrite: (saveId) => {
+          backup.sentSaveId = saveId
+          persistDocuments(false)
+        },
+      })
       : { outcome: 'auth' }
   } catch (error) {
     result = { outcome: errorKind(error) }
@@ -2107,37 +2122,24 @@ async function runBackup(id) {
   applyBackupResult(target, result, sentKey)
 }
 
-function applyBackupResult(target, { outcome, backup }, sentKey) {
+function applyBackupResult(target, result, sentKey) {
   const id = target.id
   const before = driveKeyOf(target)
-  const missing = driveStatus[id]?.missing ? { missing: true } : {}
-  if (outcome === 'saved') {
-    // An edit made during the upload is still on its way.
-    target.googleDriveBackup = backupKey(backupMapOf(target)) === sentKey ? backup : { ...backup, pending: true }
-    setDriveStatus(id, null)
-  } else if (outcome === 'conflict') {
-    target.googleDriveBackup.state = 'conflict'
-    setDriveStatus(id, null)
-  } else if (outcome === 'trashed' || (outcome === 'missing' && missing.missing)) {
-    unlinkBackup(target)
-  } else if (outcome === 'missing') {
-    // Maybe just another Google account: ask to sign in once more before letting the link go.
-    drive.forgetToken()
-    setDriveStatus(id, 'auth', { missing: true })
-  } else if (outcome === 'auth') setDriveStatus(id, 'auth', missing)
-  else if (outcome === 'readonly' || outcome === 'offline') setDriveStatus(id, outcome)
-  else setDriveStatus(id, 'failed', outcome === 'quota' ? { reason: 'quota' } : {})
+  const next = backupTransition(target.googleDriveBackup, driveStatus[id], result, backupKey(backupMapOf(target)) !== sentKey)
+  if (next.forgetToken) drive.forgetToken()
+  if (next.backup) target.googleDriveBackup = next.backup
+  else unlinkBackup(target)
+  setDriveStatus(id, next.status)
   persistDocuments(false)
+  if (driveKeyOf(target) !== before) dropToastAbout(id)
   // Toasts only when the state changes, not on every failed attempt. A lost network or a failed upload gets none.
-  const after = driveKeyOf(target)
-  if (after === before) return
-  dropToastAbout(id)
   const name = documentTitle(target)
-  if (after === 'off') notify(`The file for “${name}” was removed from Google Drive. The map is still on this device`, { dot: 'idle', about: id })
-  else if (after === 'conflict') {
-    notify(`“${name}” was changed elsewhere — saving to Drive stopped`, { dot: 'warn', about: id, action: { label: 'Details', run: () => showStorage(id) } })
-  } else if (after === 'auth') {
-    notify('Sign in to Google again — the copy is paused', { dot: 'warn', about: id, action: { label: 'Sign in', run: () => signInToDrive(id) } })
+  const about = { about: id, background: true }
+  if (next.toast === 'removed') notify(`The file for “${name}” was removed from Google Drive. The map is still on this device`, { dot: 'idle', ...about })
+  else if (next.toast === 'conflict') {
+    notify(`“${name}” was changed elsewhere — saving to Drive stopped`, { dot: 'warn', ...about, action: { label: 'Details', run: () => showStorage(id) } })
+  } else if (next.toast === 'auth') {
+    notify('Sign in to Google again — the copy is paused', { dot: 'warn', ...about, action: { label: 'Sign in', run: () => signInToDrive(id) } })
   }
 }
 
@@ -2166,21 +2168,23 @@ function signInToDrive(id) {
 
 // Signed in: everything that waited for it goes out now.
 function resumeBackups() {
-  for (const target of documents.value) {
-    const backup = target.googleDriveBackup
-    const status = driveStatus[target.id]
-    if (backup?.state !== 'linked' || (status?.status !== 'auth' && !backup.pending)) continue
+  for (const { id, googleDriveBackup: backup } of documents.value) {
+    const status = driveStatus[id]
+    if (!resumesOnSignIn(backup, status)) continue
     if (status?.status === 'auth') {
-      setDriveStatus(target.id, 'saving', status.missing ? { missing: true } : {})
-      dropToastAbout(target.id)
+      setDriveStatus(id, { status: 'saving', ...(status.missing ? { missing: true } : {}) })
+      dropToastAbout(id)
     }
-    enqueueBackup(target.id, true)
+    enqueueBackup(id, true)
   }
 }
 
-// The network is back, or the user is: whatever waited for a connection tries again.
-function retryOfflineBackups() {
-  for (const [id, status] of Object.entries(driveStatus)) if (status.status === 'offline') enqueueBackup(id, true)
+// The network is back, or the user is: whatever waited for a connection tries again — and so does an edit
+// that nothing is sending, like one made to a map that was deleted during its wait and then brought back.
+function retryWaitingBackups() {
+  for (const { id, googleDriveBackup: backup } of documents.value) {
+    if (retriesWhenBack(backup, driveStatus[id], backupQueue.busy(id))) enqueueBackup(id, true)
+  }
 }
 
 function linkBackup(id, backup, map) {
@@ -2669,6 +2673,8 @@ function undoDeletion() {
   persistDocuments()
   flashDocId.value = pending.document.id
   setTimeout(() => flashDocId.value === pending.document.id && (flashDocId.value = null), 1500)
+  // An edit whose upload came due while the map was gone goes out now.
+  retryWaitingBackups()
 }
 
 function download(blob, extension) {
@@ -3049,10 +3055,10 @@ onMounted(() => {
   if (DRIVE_ENABLED && documents.value.some((document) => document.googleDriveBackup)) drive.preload().catch(() => {})
   // An edit that did not reach Drive before the page was closed: nothing can be sent without signing in, so say so — quietly.
   if (DRIVE_ENABLED) {
-    for (const { id, googleDriveBackup: backup } of documents.value) if (backup?.pending && backup.state === 'linked') setDriveStatus(id, 'auth')
+    for (const { id, googleDriveBackup: backup } of documents.value) if (backup?.pending && backup.state === 'linked') setDriveStatus(id, { status: 'auth' })
   }
-  window.addEventListener('focus', retryOfflineBackups)
-  window.addEventListener('online', retryOfflineBackups)
+  window.addEventListener('focus', retryWaitingBackups)
+  window.addEventListener('online', retryWaitingBackups)
   // Capture keyboard navigation before Vue Flow can move the selected node.
   window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('keyup', onLinkModifierKeyup)
@@ -3082,8 +3088,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('keyup', onLinkModifierKeyup)
   window.removeEventListener('blur', clearLinkModifier)
-  window.removeEventListener('focus', retryOfflineBackups)
-  window.removeEventListener('online', retryOfflineBackups)
+  window.removeEventListener('focus', retryWaitingBackups)
+  window.removeEventListener('online', retryWaitingBackups)
   window.removeEventListener('pointerdown', onWindowPointerDown)
   window.removeEventListener('copy', onCopy)
   window.removeEventListener('paste', onPaste)

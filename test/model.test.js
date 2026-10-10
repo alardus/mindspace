@@ -817,3 +817,16 @@ test('library keeps valid Drive backup metadata and drops broken ones', () => {
   assert.deepEqual(documents[2].googleDriveBackup, { ...backup, driveVersion: '', name: '' })
   for (const index of [3, 4, 5]) assert.equal('googleDriveBackup' in documents[index], false)
 })
+
+test('the id of a save on its way to Drive is kept with the link', () => {
+  const map = starterMap()
+  const backup = { fileId: 'f1', driveVersion: '7', md5Checksum: 'abc', saveId: 's1', state: 'linked', name: 'Plan.mindmap', folder: '' }
+  const { documents } = normalizeLibrary({ documents: [
+    { id: 'a', map, googleDriveBackup: { ...backup, sentSaveId: 's2' } },
+    { id: 'b', map, googleDriveBackup: { ...backup, sentSaveId: 5 } },
+    { id: 'c', map, googleDriveBackup: { ...backup, sentSaveId: '' } },
+  ] })
+  assert.deepEqual(documents[0].googleDriveBackup, { ...backup, sentSaveId: 's2' })
+  assert.deepEqual(documents[1].googleDriveBackup, backup)
+  assert.deepEqual(documents[2].googleDriveBackup, backup)
+})

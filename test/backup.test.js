@@ -1,8 +1,8 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BACKUP_VIEW, DRIVE_MESSAGES, backupFileName, backupKey, backupUi, createBackup, createBackupQueue, errorKind, linkedDocument, pushBackup, remoteCheck,
-  replaceBackup, restoreBackup,
+  BACKUP_VIEW, DRIVE_MESSAGES, backupFileName, backupKey, backupTransition, backupUi, createBackup, createBackupQueue, errorKind, isBackupEdit, linkedDocument,
+  pushBackup, remoteCheck, replaceBackup, restoreBackup, resumesOnSignIn, retriesWhenBack,
 } from '../src/backup.js'
 
 test('what auto-layout derives is not an edit; the same fields placed by hand are', () => {
@@ -304,4 +304,97 @@ test('restoring a trashed file is refused', async () => {
   const drive = fakeDrive([{ id: 'f1', name: 'Old.mindmap', content: 'old', trashed: true }])
   assert.deepEqual(await restoreBackup(drive, 'f1'), { outcome: 'trashed' })
   assert.deepEqual(drive.calls, [])
+})
+
+test('a write whose confirmation fails is still our own save', async () => {
+  const { drive, backup, file } = await linked()
+  const getMetadata = drive.getMetadata
+  let reads = 0
+  // The upload lands, then the sign-in runs out before the file is read back.
+  drive.getMetadata = async (id) => {
+    if (++reads === 2) throw Object.assign(new Error('Google sign-in is required'), { status: 401 })
+    return getMetadata(id)
+  }
+  const result = await pushBackup(drive, backup, { blob: text('v2'), now: 2000 })
+  assert.equal(result.outcome, 'saved')
+  assert.deepEqual(result.backup, {
+    ...backup, driveVersion: file().version, md5Checksum: digest('v2'), saveId: file().appProperties.mindspaceSaveId, savedAt: 2000,
+  })
+  drive.getMetadata = getMetadata
+  assert.equal((await pushBackup(drive, result.backup, { blob: text('v3') })).outcome, 'saved')
+})
+
+test('a save that landed as the page closed is not a conflict after the reload', async () => {
+  const { drive, backup, file } = await linked()
+  let sent
+  // The bytes reach Drive, the answer never reaches the page.
+  drive.afterWrite = () => {
+    throw Object.assign(new Error('The page is gone'), { status: 0 })
+  }
+  await assert.rejects(pushBackup(drive, backup, { blob: text('v2'), beforeWrite: (saveId) => (sent = saveId) }), { status: 0 })
+  drive.afterWrite = null
+  assert.equal(file().content, 'v2')
+  // The id was handed over before the bytes went out, so it could be stored with the map.
+  assert.equal(file().appProperties.mindspaceSaveId, sent)
+  const reloaded = { ...backup, sentSaveId: sent }
+  assert.equal(remoteCheck(backup, await drive.getMetadata(backup.fileId)), 'conflict')
+  assert.equal(remoteCheck(reloaded, await drive.getMetadata(backup.fileId)), 'ok')
+  const result = await pushBackup(drive, reloaded, { blob: text('v3') })
+  assert.equal(result.outcome, 'saved')
+  assert.equal(file().appProperties.mindspaceParentSaveId, sent)
+  assert.equal('sentSaveId' in result.backup, false)
+  // Somebody else's save is still somebody else's.
+  drive.otherDevice(backup.fileId, 'theirs')
+  assert.deepEqual(await pushBackup(drive, reloaded, { blob: text('v4') }), { outcome: 'conflict' })
+})
+
+test('what an upload attempt does to a linked map', () => {
+  const backup = { fileId: 'f1', state: 'linked', saveId: 's1', md5Checksum: 'm1', name: 'Plan.mindmap', pending: true }
+  const saved = { fileId: 'f1', state: 'linked', saveId: 's2', md5Checksum: 'm2', name: 'Plan.mindmap', savedAt: 5 }
+  const step = (status, result, editedSince) => backupTransition(backup, status, result, editedSince)
+  const quiet = { toast: null, forgetToken: false }
+  assert.deepEqual(step({ status: 'saving' }, { outcome: 'saved', backup: saved }), { backup: saved, status: null, ...quiet })
+  // An edit made while the upload was on its way still waits.
+  assert.deepEqual(step(null, { outcome: 'saved', backup: saved }, true), { backup: { ...saved, pending: true }, status: null, ...quiet })
+  assert.deepEqual(step(null, { outcome: 'conflict' }), { backup: { ...backup, state: 'conflict' }, status: null, toast: 'conflict', forgetToken: false })
+  assert.deepEqual(step(null, { outcome: 'trashed' }), { backup: null, status: null, toast: 'removed', forgetToken: false })
+  // Not found: maybe another Google account. Ask once, with a fresh sign-in; the second miss lets the link go.
+  assert.deepEqual(step({ status: 'saving' }, { outcome: 'missing' }), { backup, status: { status: 'auth', missing: true }, toast: 'auth', forgetToken: true })
+  assert.deepEqual(step({ status: 'saving', missing: true }, { outcome: 'missing' }), { backup: null, status: null, toast: 'removed', forgetToken: false })
+  assert.deepEqual(step({ status: 'saving', missing: true }, { outcome: 'auth' }), { backup, status: { status: 'auth', missing: true }, toast: 'auth', forgetToken: false })
+  // A toast only when the state changes.
+  assert.equal(step(null, { outcome: 'auth' }).toast, 'auth')
+  assert.equal(step({ status: 'auth' }, { outcome: 'auth' }).toast, null)
+  assert.equal(backupTransition({ ...backup, state: 'conflict' }, null, { outcome: 'conflict' }).toast, null)
+  // A lost network, a full Drive and a failed upload are states, not alarms.
+  const states = [['offline', { status: 'offline' }], ['readonly', { status: 'readonly' }], ['quota', { status: 'failed', reason: 'quota' }], ['failed', { status: 'failed' }], ['blocked', { status: 'failed' }]]
+  for (const [outcome, status] of states) assert.deepEqual(step(null, { outcome }), { backup, status, ...quiet }, outcome)
+})
+
+test('the first look at a map is not an edit unless the caller made one', () => {
+  assert.equal(isBackupEdit(undefined, 'a'), false)
+  assert.equal(isBackupEdit(undefined, 'a', true), true)
+  assert.equal(isBackupEdit('a', 'a', true), false)
+  assert.equal(isBackupEdit('a', 'b'), true)
+})
+
+test('which maps go out after a sign-in, and which when the user or the network is back', () => {
+  const linked = { state: 'linked' }
+  const pending = { state: 'linked', pending: true }
+  assert.equal(resumesOnSignIn(linked, { status: 'auth' }), true)
+  assert.equal(resumesOnSignIn(pending, undefined), true)
+  assert.equal(resumesOnSignIn(pending, { status: 'offline' }), true)
+  assert.equal(resumesOnSignIn(linked, undefined), false)
+  assert.equal(resumesOnSignIn({ state: 'conflict', pending: true }, { status: 'auth' }), false)
+  assert.equal(resumesOnSignIn(undefined, { status: 'auth' }), false)
+
+  assert.equal(retriesWhenBack(linked, { status: 'offline' }, false), true)
+  // An edit nobody is sending and nothing explains: e.g. a map deleted during its wait and brought back with Undo.
+  assert.equal(retriesWhenBack(pending, undefined, false), true)
+  assert.equal(retriesWhenBack(pending, undefined, true), false)
+  assert.equal(retriesWhenBack(pending, { status: 'auth' }, false), false)
+  assert.equal(retriesWhenBack(pending, { status: 'failed' }, false), false)
+  assert.equal(retriesWhenBack(linked, undefined, false), false)
+  assert.equal(retriesWhenBack({ state: 'conflict', pending: true }, undefined, false), false)
+  assert.equal(retriesWhenBack(undefined, undefined, false), false)
 })
