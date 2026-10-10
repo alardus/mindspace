@@ -148,3 +148,64 @@ export function createBackupQueue(run, delay = BACKUP_DELAY) {
 
   return { schedule, now, busy: (id) => Boolean(jobs.get(id)?.running || jobs.get(id)?.timer) }
 }
+
+const saveIdOf = (meta) => meta.appProperties?.mindspaceSaveId ?? ''
+
+// What gets persisted with the map: the link, the state of the Drive file to compare against next time,
+// and what the Storage block shows without asking Drive.
+async function baseline(drive, meta, now) {
+  return {
+    fileId: meta.id,
+    driveVersion: meta.version ?? '',
+    md5Checksum: meta.md5Checksum ?? '',
+    saveId: saveIdOf(meta),
+    state: 'linked',
+    name: meta.name ?? '',
+    folder: await drive.folderLabel(meta.parents?.[0]),
+    savedAt: now,
+  }
+}
+
+// Every write carries a new save id and the id it replaces. Drive has no compare-and-swap for file content, so the
+// file is read back: a save id that is no longer ours means another device wrote in between.
+async function write(drive, fileId, { title, blob, parentSaveId, now }) {
+  const saveId = globalThis.crypto.randomUUID()
+  const appProperties = { mindspaceSaveId: saveId, mindspaceParentSaveId: parentSaveId, mindspaceFormat: 'mindmap' }
+  const written = fileId
+    ? await drive.updateFile(fileId, { blob, appProperties })
+    : await drive.createFile({ name: backupFileName(title), folderId: (await drive.ensureFolder()).id, blob, appProperties })
+  const meta = await drive.getMetadata(written.id)
+  if (saveIdOf(meta) !== saveId) return { outcome: 'conflict' }
+  return { outcome: 'saved', backup: await baseline(drive, meta, now) }
+}
+
+// A new file in the Mindspace folder.
+export async function createBackup(drive, { title, blob, now = Date.now() }) {
+  const result = await write(drive, null, { title, blob, parentSaveId: '', now })
+  if (result.outcome !== 'saved') throw new Error('The new backup changed while it was being created')
+  return result.backup
+}
+
+// The regular upload: only onto the file as this device last left it.
+export async function pushBackup(drive, backup, { blob, now = Date.now() }) {
+  const meta = await drive.getMetadata(backup.fileId)
+  const check = remoteCheck(backup, meta)
+  if (check !== 'ok') return { outcome: check }
+  return write(drive, backup.fileId, { blob, parentSaveId: backup.saveId, now })
+}
+
+// The user confirmed replacing this file with the local map, whatever it holds.
+export async function replaceBackup(drive, fileId, { blob, now = Date.now() }) {
+  const meta = await drive.getMetadata(fileId)
+  const check = remoteCheck(null, meta)
+  if (check !== 'ok') return { outcome: check }
+  return write(drive, fileId, { blob, parentSaveId: saveIdOf(meta), now })
+}
+
+// Downloads the file and takes it as the baseline. Nothing is written: the first local edit starts the uploads.
+export async function restoreBackup(drive, fileId, { now = Date.now() } = {}) {
+  const meta = await drive.getMetadata(fileId)
+  if (meta.trashed) return { outcome: 'trashed' }
+  const blob = await drive.downloadFile(fileId)
+  return { outcome: 'ok', file: new File([blob], meta.name), backup: await baseline(drive, meta, now) }
+}

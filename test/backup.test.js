@@ -1,6 +1,9 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { BACKUP_VIEW, DRIVE_MESSAGES, backupFileName, backupKey, backupUi, createBackupQueue, errorKind, linkedDocument, remoteCheck } from '../src/backup.js'
+import {
+  BACKUP_VIEW, DRIVE_MESSAGES, backupFileName, backupKey, backupUi, createBackup, createBackupQueue, errorKind, linkedDocument, pushBackup, remoteCheck,
+  replaceBackup, restoreBackup,
+} from '../src/backup.js'
 
 test('auto-layout positions are not an edit, manual positions are', () => {
   const map = (x, autoLayout) => ({ title: 'A', autoLayout, nodes: [{ id: 'n', position: { x, y: 0 }, data: { label: 'One' } }] })
@@ -124,4 +127,170 @@ test('maps queue independently and a failing run does not break the queue', asyn
   assert.equal(runs.length, 3)
   queue.now('missing')
   assert.equal(runs.at(-1).id, 'missing')
+})
+
+// An in-memory Drive with the client's shape. The digest stands in for md5: equal content, equal checksum.
+const digest = (text) => `md5:${text}`
+function fakeDrive(initial = []) {
+  const files = new Map(initial.map((file) => [file.id, { version: '1', capabilities: { canEdit: true }, md5Checksum: digest(file.content), ...file }]))
+  const view = ({ content, ...meta }) => structuredClone(meta)
+  async function write(method, id, file, blob, appProperties) {
+    drive.calls.push([method, id])
+    const content = await blob.text()
+    const next = { ...file, content, md5Checksum: digest(content), version: String(Number(file.version) + 1), appProperties: { ...file.appProperties, ...appProperties } }
+    files.set(id, next)
+    // The moment between a write and the read that follows it: another device may get in.
+    drive.afterWrite?.(id)
+    return view(next)
+  }
+  const drive = {
+    files,
+    calls: [],
+    afterWrite: null,
+    writes: () => drive.calls.filter(([method]) => method === 'createFile' || method === 'updateFile'),
+    // What a second device does: new content under its own save id.
+    otherDevice(id, content) {
+      const file = files.get(id)
+      files.set(id, { ...file, content, md5Checksum: digest(content), version: String(Number(file.version) + 1), appProperties: { ...file.appProperties, mindspaceSaveId: 'other-device' } })
+    },
+    async getMetadata(id) {
+      if (!files.has(id)) throw Object.assign(new Error('File not found'), { status: 404 })
+      return view(files.get(id))
+    },
+    createFile: ({ name, folderId, blob, appProperties }) => write('createFile', `file${files.size + 1}`, { id: `file${files.size + 1}`, name, parents: [folderId], version: '0', capabilities: { canEdit: true } }, blob, appProperties),
+    updateFile: (id, { blob, appProperties }) => write('updateFile', id, files.get(id), blob, appProperties),
+    async downloadFile(id) {
+      drive.calls.push(['downloadFile', id])
+      return new Blob([files.get(id).content])
+    },
+    ensureFolder: async () => ({ id: 'dir', name: 'Mindspace' }),
+    folderLabel: async (id) => (id === 'dir' ? 'Mindspace' : ''),
+  }
+  return drive
+}
+const text = (content) => new Blob([content])
+// A map backed up once from this device.
+async function linked(content = 'v1') {
+  const drive = fakeDrive()
+  const backup = await createBackup(drive, { title: 'Plan', blob: text(content), now: 1000 })
+  drive.calls.length = 0
+  return { drive, backup, file: () => drive.files.get(backup.fileId) }
+}
+
+test('a new backup lands in the Mindspace folder and becomes the baseline', async () => {
+  const drive = fakeDrive()
+  const backup = await createBackup(drive, { title: 'Plan', blob: text('v1'), now: 1000 })
+  const file = drive.files.get(backup.fileId)
+  assert.equal(file.name, 'Plan.mindmap')
+  assert.deepEqual(file.parents, ['dir'])
+  assert.equal(file.content, 'v1')
+  assert.equal(file.appProperties.mindspaceFormat, 'mindmap')
+  assert.equal(file.appProperties.mindspaceParentSaveId, '')
+  assert.ok(file.appProperties.mindspaceSaveId)
+  assert.deepEqual(backup, {
+    fileId: file.id, driveVersion: file.version, md5Checksum: file.md5Checksum, saveId: file.appProperties.mindspaceSaveId,
+    state: 'linked', name: 'Plan.mindmap', folder: 'Mindspace', savedAt: 1000,
+  })
+})
+
+test('an unchanged remote is updated and the lineage advances', async () => {
+  const { drive, backup, file } = await linked()
+  const result = await pushBackup(drive, backup, { blob: text('v2'), now: 2000 })
+  assert.equal(result.outcome, 'saved')
+  assert.equal(file().content, 'v2')
+  assert.equal(file().appProperties.mindspaceParentSaveId, backup.saveId)
+  assert.notEqual(result.backup.saveId, backup.saveId)
+  assert.deepEqual(result.backup, {
+    ...backup, driveVersion: file().version, md5Checksum: digest('v2'), saveId: file().appProperties.mindspaceSaveId, savedAt: 2000,
+  })
+  assert.deepEqual(drive.writes(), [['updateFile', backup.fileId]])
+  // And again from the new baseline.
+  assert.equal((await pushBackup(drive, result.backup, { blob: text('v3') })).outcome, 'saved')
+})
+
+test('a rename or move in Drive is not a conflict', async () => {
+  const { drive, backup, file } = await linked()
+  Object.assign(file(), { name: 'Renamed.mindmap', parents: ['elsewhere'], version: '40' })
+  const result = await pushBackup(drive, backup, { blob: text('v2') })
+  assert.equal(result.outcome, 'saved')
+  assert.equal(result.backup.name, 'Renamed.mindmap')
+  assert.equal(result.backup.folder, '')
+  assert.equal(result.backup.driveVersion, '41')
+  assert.equal(file().content, 'v2')
+})
+
+test('a changed remote is neither overwritten nor pulled', async () => {
+  const { drive, backup, file } = await linked()
+  drive.otherDevice(backup.fileId, 'theirs')
+  assert.deepEqual(await pushBackup(drive, backup, { blob: text('mine') }), { outcome: 'conflict' })
+  assert.equal(file().content, 'theirs')
+  // Same bytes saved by another device are still someone else's save.
+  drive.otherDevice(backup.fileId, 'v1')
+  assert.equal(file().md5Checksum, backup.md5Checksum)
+  assert.deepEqual(await pushBackup(drive, backup, { blob: text('mine') }), { outcome: 'conflict' })
+  assert.deepEqual(drive.writes(), [])
+})
+
+test('a trashed or read-only remote stops before writing', async () => {
+  const { drive, backup, file } = await linked()
+  file().capabilities.canEdit = false
+  assert.deepEqual(await pushBackup(drive, backup, { blob: text('v2') }), { outcome: 'readonly' })
+  file().trashed = true
+  assert.deepEqual(await pushBackup(drive, backup, { blob: text('v2') }), { outcome: 'trashed' })
+  assert.deepEqual(drive.writes(), [])
+  drive.files.delete(backup.fileId)
+  await assert.rejects(pushBackup(drive, backup, { blob: text('v2') }), { status: 404 })
+})
+
+test('a write that loses the race is reported as a conflict', async () => {
+  const { drive, backup, file } = await linked()
+  drive.afterWrite = (id) => drive.otherDevice(id, 'theirs')
+  assert.deepEqual(await pushBackup(drive, backup, { blob: text('mine') }), { outcome: 'conflict' })
+  assert.equal(file().content, 'theirs')
+})
+
+test('a conflicted file can be overwritten on request', async () => {
+  const { drive, backup, file } = await linked()
+  drive.otherDevice(backup.fileId, 'theirs')
+  const result = await replaceBackup(drive, backup.fileId, { blob: text('mine'), now: 3000 })
+  assert.equal(result.outcome, 'saved')
+  assert.equal(file().content, 'mine')
+  assert.equal(file().appProperties.mindspaceParentSaveId, 'other-device')
+  assert.equal(result.backup.savedAt, 3000)
+  assert.equal(result.backup.state, 'linked')
+  assert.equal((await pushBackup(drive, result.backup, { blob: text('mine 2') })).outcome, 'saved')
+})
+
+test('replacing a read-only or trashed file writes nothing', async () => {
+  const drive = fakeDrive([{ id: 'f1', name: 'Shared.mindmap', content: 'theirs', capabilities: { canEdit: false } }, { id: 'f2', name: 'Old.mindmap', content: 'old', trashed: true }])
+  assert.deepEqual(await replaceBackup(drive, 'f1', { blob: text('mine') }), { outcome: 'readonly' })
+  assert.deepEqual(await replaceBackup(drive, 'f2', { blob: text('mine') }), { outcome: 'trashed' })
+  assert.deepEqual(drive.writes(), [])
+})
+
+test('restore records the baseline without uploading', async () => {
+  const drive = fakeDrive([
+    { id: 'f1', name: 'Trip.mindmap', content: 'theirs', version: '4', parents: ['dir'], appProperties: { mindspaceSaveId: 's9' } },
+    { id: 'f2', name: 'By hand.mindmap', content: 'manual', parents: ['root'] },
+  ])
+  const restored = await restoreBackup(drive, 'f1', { now: 5000 })
+  assert.equal(restored.outcome, 'ok')
+  assert.equal(restored.file.name, 'Trip.mindmap')
+  assert.equal(await restored.file.text(), 'theirs')
+  assert.deepEqual(restored.backup, {
+    fileId: 'f1', driveVersion: '4', md5Checksum: digest('theirs'), saveId: 's9', state: 'linked', name: 'Trip.mindmap', folder: 'Mindspace', savedAt: 5000,
+  })
+  // A file uploaded by hand has no lineage yet; the first save from here starts it.
+  const manual = await restoreBackup(drive, 'f2')
+  assert.equal(manual.backup.saveId, '')
+  assert.equal(manual.backup.folder, '')
+  assert.deepEqual(drive.writes(), [])
+  assert.equal((await pushBackup(drive, manual.backup, { blob: text('edited') })).outcome, 'saved')
+  assert.equal(drive.files.get('f2').appProperties.mindspaceParentSaveId, '')
+})
+
+test('restoring a trashed file is refused', async () => {
+  const drive = fakeDrive([{ id: 'f1', name: 'Old.mindmap', content: 'old', trashed: true }])
+  assert.deepEqual(await restoreBackup(drive, 'f1'), { outcome: 'trashed' })
+  assert.deepEqual(drive.calls, [])
 })
