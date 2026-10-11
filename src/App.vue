@@ -18,6 +18,7 @@ import {
   branchCurveBend,
   canLink,
   descendantsOf,
+  freeObjectIdsInRect,
   highlightParts,
   insertTreeEdgeAfter,
   layoutVerticalGap,
@@ -64,6 +65,7 @@ import {
   toMarkdown,
   toOpml,
   toggleMark,
+  translateCanvasObjects,
 } from './model.js'
 import { createMindmapFile, readMindmapFile } from './archive.js'
 import { createImageAsset, deleteImageAssets, loadImageAsset, pruneImageAssets, saveImageAssets } from './assets.js'
@@ -72,6 +74,7 @@ import {
   MINDSPACE_CLIPBOARD_TYPE,
   assertClipboardAssetCapacity,
   assertClipboardCapacity,
+  assertFreeObjectCapacity,
   clipboardImageFiles,
   isEditableClipboardTarget,
   parseClipboardData,
@@ -80,7 +83,7 @@ import {
 } from './clipboard.js'
 import Logo from './Logo.vue'
 import MarkIcon from './MarkIcon.vue'
-import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, keyLabel, selectAllCanvasNodes, shortcutGroups, shortcutKeys } from './shortcuts.js'
+import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, keyLabel, selectAllCanvasObjects, shortcutGroups, shortcutKeys, typingTarget } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
 const SHORTCUTS_TIP_KEY = 'mindspace-shortcuts-tip'
@@ -115,8 +118,16 @@ const freeMarks = ref(initial.freeMarks ?? [])
 const freeTexts = ref(initial.freeTexts ?? [])
 const links = ref(initial.links ?? [])
 const selectedLinkId = ref(null)
-const selectedMarkId = ref(null)
-const selectedTextId = ref(null)
+const selectedMarkIds = ref(new Set())
+const selectedTextIds = ref(new Set())
+const selectedMarkId = computed({
+  get: () => selectedMarkIds.value.size === 1 ? selectedMarkIds.value.values().next().value : null,
+  set: (id) => (selectedMarkIds.value = new Set(id ? [id] : [])),
+})
+const selectedTextId = computed({
+  get: () => selectedTextIds.value.size === 1 ? selectedTextIds.value.values().next().value : null,
+  set: (id) => (selectedTextIds.value = new Set(id ? [id] : [])),
+})
 const editingTextId = ref(null)
 const textDraft = ref('')
 let textEditStart = null
@@ -260,6 +271,8 @@ let dirty = false
 let dragOrigin = null
 let dragBranch = null
 let dragRoots = []
+let nodeDragFree = []
+let nodeWasDragged = false
 let rigidDrag = null
 let layoutFrame = 0
 let pendingLayout = pendingLayoutInitial
@@ -435,7 +448,7 @@ function openMap(map) {
   links.value = normalized.links ?? []
   editingId.value = null
   editingTextId.value = null
-  selectedTextId.value = null
+  selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
   textDraft.value = ''
   textEditStart = null
   contextMenu.value = null
@@ -534,9 +547,16 @@ async function addImageFile(file, center) {
 }
 
 function onCopy(event) {
-  if (isEditableClipboardTarget(event.target) || !selectedNodes.value.length || !event.clipboardData) return
+  if (isEditableClipboardTarget(event.target)
+    || (!selectedNodes.value.length && !selectedMarkIds.value.size && !selectedTextIds.value.size)
+    || !event.clipboardData) return
   try {
-    const copied = serializeClipboardBranches(nodes.value, edges.value, selectedNodes.value.map((node) => node.id), links.value)
+    const copied = serializeClipboardBranches(nodes.value, edges.value, selectedNodes.value.map((node) => node.id), links.value, {
+      freeMarks: freeMarks.value,
+      freeTexts: freeTexts.value,
+      selectedMarkIds: selectedMarkIds.value,
+      selectedTextIds: selectedTextIds.value,
+    })
     event.clipboardData.setData(MINDSPACE_CLIPBOARD_TYPE, copied.custom)
     event.clipboardData.setData('text/plain', copied.text)
     event.preventDefault()
@@ -563,7 +583,7 @@ async function onPaste(event) {
   try {
     fragment = parseClipboardData(event.clipboardData)
     if (!fragment) return
-    assertClipboardCapacity(nodes.value.length, fragment.nodes.length)
+    assertPasteCapacity(fragment)
   } catch (error) {
     event.preventDefault()
     return notify(error instanceof ClipboardPayloadError ? error.message : 'The clipboard content could not be pasted')
@@ -577,7 +597,7 @@ async function onPaste(event) {
     const assets = await Promise.all([...assetIds].map((assetId) => loadImageAsset(assetId)))
     if (assets.some((asset) => !asset)) throw new ClipboardPayloadError('A copied image is no longer available')
     if (activeId.value !== documentAtStart) return notify('Content was not pasted because the map changed.')
-    assertClipboardCapacity(nodes.value.length, fragment.nodes.length)
+    assertPasteCapacity(fragment)
     assertClipboardAssetCapacity(referencedAssetIds(cleanMap()), assetIds)
 
     if (fragment.source !== 'mindspace') {
@@ -595,17 +615,30 @@ async function onPaste(event) {
     nodes.value.push(...fragment.nodes)
     edges.value.push(...fragment.edges)
     links.value.push(...(fragment.links ?? []))
+    freeMarks.value.push(...(fragment.freeMarks ?? []))
+    freeTexts.value.push(...(fragment.freeTexts ?? []))
+    selectedMarkIds.value = new Set((fragment.freeMarks ?? []).map((mark) => mark.id))
+    selectedTextIds.value = new Set((fragment.freeTexts ?? []).map((text) => text.id))
+    selectedLinkId.value = null
     orient()
-    if (autoLayout.value) relayout(false, false, false, fragment.roots[0])
+    const freeCount = (fragment.freeMarks?.length ?? 0) + (fragment.freeTexts?.length ?? 0)
+    if (fragment.nodes.length && freeCount) autoLayout.value = false
+    if (autoLayout.value && fragment.nodes.length) relayout(false, false, false, fragment.roots[0])
     else applyVisibility()
     for (const asset of assets) {
       if (asset && !imageUrls.has(asset.image.assetId)) imageUrls.set(asset.image.assetId, URL.createObjectURL(asset.blob))
     }
     record(before)
-    notify(`Pasted ${pluralNodes(fragment.nodes.length)}`)
+    notify(`Pasted ${pluralNodes(fragment.nodes.length + freeCount)}`)
   } catch (error) {
     notify(error instanceof ClipboardPayloadError ? error.message : 'The clipboard content could not be pasted')
   }
+}
+
+function assertPasteCapacity(fragment) {
+  assertClipboardCapacity(nodes.value.length, fragment.nodes.length)
+  assertFreeObjectCapacity(freeMarks.value.length, fragment.freeMarks?.length ?? 0, 'icons')
+  assertFreeObjectCapacity(freeTexts.value.length, fragment.freeTexts?.length ?? 0, 'text blocks')
 }
 
 function onImageDrop(event) {
@@ -651,6 +684,9 @@ function applyVisibility() {
 }
 
 function selectOnly(id) {
+  finishFreeTextEditing()
+  clearFreeSelection()
+  selectedLinkId.value = null
   for (const node of nodes.value) node.selected = node.id === id
 }
 
@@ -828,7 +864,9 @@ function addSibling() {
 function removeSelected() {
   const nodesToRemove = removableSelectedNodes.value
   const selectedEdges = new Set(edges.value.filter((edge) => edge.selected).map((edge) => edge.id))
-  if (!nodesToRemove.length && !selectedEdges.size) return
+  const markIds = selectedMarkIds.value
+  const textIds = selectedTextIds.value
+  if (!nodesToRemove.length && !selectedEdges.size && !markIds.size && !textIds.size) return
   const before = snapshot()
   const removed = new Set()
   for (const node of nodesToRemove) {
@@ -837,6 +875,9 @@ function removeSelected() {
   }
   nodes.value = nodes.value.filter((node) => !removed.has(node.id))
   edges.value = edges.value.filter((edge) => !selectedEdges.has(edge.id) && !removed.has(edge.source) && !removed.has(edge.target))
+  freeMarks.value = freeMarks.value.filter((mark) => !markIds.has(mark.id))
+  freeTexts.value = freeTexts.value.filter((text) => !textIds.has(text.id))
+  clearFreeSelection()
   pruneLinks()
   pruneImageUrls()
   const childIds = new Set(edges.value.filter((edge) => edge.data?.kind === 'tree').map((edge) => edge.target))
@@ -940,6 +981,50 @@ function onPanelKeydown(event) {
 
 function clearSelection() {
   for (const node of nodes.value) node.selected = false
+}
+
+function clearFreeSelection() {
+  selectedMarkIds.value = new Set()
+  selectedTextIds.value = new Set()
+}
+
+let canvasSelectionStart = null
+
+function onCanvasSelectionStart(event) {
+  finishFreeTextEditing()
+  finishEditing()
+  clearFreeSelection()
+  selectedLinkId.value = null
+  canvasSelectionStart = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+}
+
+function onCanvasSelectionEnd(event) {
+  if (!canvasSelectionStart) return
+  const end = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+  const rect = {
+    x: Math.min(canvasSelectionStart.x, end.x),
+    y: Math.min(canvasSelectionStart.y, end.y),
+    width: Math.abs(end.x - canvasSelectionStart.x),
+    height: Math.abs(end.y - canvasSelectionStart.y),
+  }
+  const selected = freeObjectIdsInRect(rect, freeMarks.value, freeTexts.value)
+  selectedMarkIds.value = new Set(selected.markIds)
+  selectedTextIds.value = new Set(selected.textIds)
+  canvasSelectionStart = null
+}
+
+function onNodeClick() {
+  if (nodeWasDragged) return
+  finishFreeTextEditing()
+  clearFreeSelection()
+  selectedLinkId.value = null
+}
+
+function selectAllCanvas() {
+  const selected = selectAllCanvasObjects(nodes.value, freeMarks.value, freeTexts.value)
+  selectedMarkIds.value = new Set(selected.markIds)
+  selectedTextIds.value = new Set(selected.textIds)
+  selectedLinkId.value = null
 }
 
 // How far to move a [from, to] span into [low, high]; a span too big to fit aligns to low.
@@ -1180,9 +1265,13 @@ watch(activeId, () => {
 watch(inspectorOpen, placeSearch)
 
 function onNodeDragStart({ node, nodes: dragged = [node] }) {
+  nodeWasDragged = true
   if (alignmentGuides.value.length) alignmentGuides.value = []
   dragStart = snapshot()
   dragOrigin = { ...node.position }
+  nodeDragFree = [...freeMarks.value, ...freeTexts.value]
+    .filter((item) => selectedMarkIds.value.has(item.id) || selectedTextIds.value.has(item.id))
+    .map((item) => ({ item, origin: { x: item.x, y: item.y } }))
   const draggedIds = new Set(dragged.map((item) => item.id))
   dragRoots = selectedBranchRoots(draggedIds, edges.value)
     .map((id) => nodesById.value.get(id))
@@ -1201,6 +1290,16 @@ function onNodeDragStart({ node, nodes: dragged = [node] }) {
     ].filter(Boolean)
     for (const element of elements) element.style.translate = 'var(--branch-drag-x) var(--branch-drag-y)'
     rigidDrag = { elements, dx: 0, dy: 0, rawPosition: dragOrigin }
+  }
+}
+
+function moveFreeWithNode(node, restore = false) {
+  if (!dragOrigin) return
+  const dx = restore ? 0 : node.position.x - dragOrigin.x
+  const dy = restore ? 0 : node.position.y - dragOrigin.y
+  for (const { item, origin } of nodeDragFree) {
+    item.x = origin.x + dx
+    item.y = origin.y + dy
   }
 }
 
@@ -1409,6 +1508,7 @@ function onNodeDrag({ event, node, nodes: dragged = [node] }) {
     for (const item of dragged) item.position = { x: item.position.x + dx, y: item.position.y + dy }
     alignmentGuides.value = snapped.guides
   }
+  moveFreeWithNode(node)
   if (rigidDrag) {
     rigidDrag.rawPosition = rawPosition
     showAttachPreview(node, dragged, event)
@@ -1421,6 +1521,7 @@ function onNodeDrag({ event, node, nodes: dragged = [node] }) {
 }
 
 function onNodeDragStop(payload) {
+  setTimeout(() => (nodeWasDragged = false))
   const { node } = payload
   const roots = dragRoots.length ? [...dragRoots] : [node]
   // Vue Flow restores its raw pointer position before stop; apply the active snap once more.
@@ -1441,6 +1542,7 @@ function onNodeDragStop(payload) {
     // A click or mouse jitter — put the node back and move nothing.
     if (origin) {
       dragOrigin = origin
+      moveFreeWithNode(node, true)
       moveBranch(node, true)
       node.position = origin
       updateSides([node.id, ...descendantsOf(node.id, edges.value)])
@@ -1448,6 +1550,7 @@ function onNodeDragStop(payload) {
     dragOrigin = null
     dragBranch = null
     dragRoots = []
+    nodeDragFree = []
     dragStart = null
     return
   }
@@ -1457,6 +1560,7 @@ function onNodeDragStop(payload) {
     if (merged.error) {
       if (origin) {
         dragOrigin = origin
+        moveFreeWithNode(node, true)
         moveBranch(node, true)
         node.position = origin
         updateSides([node.id, ...descendantsOf(node.id, edges.value)])
@@ -1464,6 +1568,7 @@ function onNodeDragStop(payload) {
       }
       dragBranch = null
       dragRoots = []
+      nodeDragFree = []
       dragStart = null
       applyVisibility()
       notify(merged.error === 'target-has-image'
@@ -1479,6 +1584,7 @@ function onNodeDragStop(payload) {
     selectOnly(target.id)
     dragBranch = null
     dragRoots = []
+    nodeDragFree = []
     orient()
     if (autoLayout.value) relayout(false)
     applyVisibility()
@@ -1516,8 +1622,14 @@ function onNodeDragStop(payload) {
     notify('Auto layout off — nodes stay where you put them')
   }
   if (autoLayout.value) relayout(false)
+  if (origin && nodeDragFree.length) {
+    dragOrigin = origin
+    moveFreeWithNode(nodes.value.find((item) => item.id === node.id) ?? node)
+    dragOrigin = null
+  }
   applyVisibility()
   dragRoots = []
+  nodeDragFree = []
   record(dragStart)
   dragStart = null
 }
@@ -1535,7 +1647,8 @@ function showNodeMenu({ event, node }) {
 
 function closeOverlays() {
   contextMenu.value = null
-  selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
+  clearFreeSelection()
+  selectedLinkId.value = null
   finishFreeTextEditing()
   finishEditing()
 }
@@ -1579,9 +1692,14 @@ function toggleMarks() {
   marksOpen.value = !marksOpen.value
 }
 
-// The set stays open while you work on the canvas; a click anywhere else closes it.
+function closeMarks() {
+  marksOpen.value = false
+  if (marksWrap.value?.contains(document.activeElement)) document.activeElement.blur()
+}
+
+// A pointer press outside the set closes it before the canvas handles the same gesture.
 function onWindowPointerDown(event) {
-  if (marksOpen.value && !event.target.closest?.('.mark-wrap, .mind-flow, .mark-frame')) marksOpen.value = false
+  if (marksOpen.value && !marksWrap.value?.contains(event.target)) closeMarks()
 }
 
 function onMarkGridKeydown(event) {
@@ -1644,12 +1762,6 @@ function removeNodeMark(nodeId, id) {
   contextMenu.value = null
 }
 
-function removeFreeMark() {
-  const before = snapshot()
-  freeMarks.value = freeMarks.value.filter((mark) => mark.id !== selectedMarkId.value)
-  record(before)
-}
-
 function duplicateFreeMark() {
   const before = snapshot()
   const { mark, x, y, size } = selectedMark.value
@@ -1657,8 +1769,23 @@ function duplicateFreeMark() {
   record(before)
 }
 
-// One pointer gesture on a free mark — a move or a corner resize — is one undo step, recorded on release.
-function dragFreeMark(event, mark, update) {
+function freeDragGroup(anchor) {
+  const free = [...freeMarks.value, ...freeTexts.value]
+    .filter((item) => selectedMarkIds.value.has(item.id) || selectedTextIds.value.has(item.id))
+  const roots = selectedBranchRoots(selectedNodes.value.map((node) => node.id), edges.value)
+  const nodeIds = new Set(roots.flatMap((id) => [id, ...descendantsOf(id, edges.value)]))
+  const groupNodes = nodes.value.filter((node) => nodeIds.has(node.id))
+  return {
+    excluded: new Set([...free, ...groupNodes]),
+    followers: free.filter((item) => item !== anchor),
+    nodes: groupNodes,
+    dx: 0,
+    dy: 0,
+  }
+}
+
+// One pointer gesture on a free object — a move or a corner resize — is one undo step, recorded on release.
+function dragFreeMark(event, mark, update, group = null) {
   const before = snapshot()
   const origin = { ...mark }
   let dragging = false
@@ -1670,12 +1797,24 @@ function dragFreeMark(event, mark, update) {
     if (!dragging && Math.hypot(dx, dy) < 4) return
     dragging = true
     Object.assign(mark, update(origin, dx / viewport.value.zoom, dy / viewport.value.zoom, moved))
+    if (!group) return
+    const movedX = mark.x - origin.x
+    const movedY = mark.y - origin.y
+    translateCanvasObjects(group.nodes, group.followers, movedX - group.dx, movedY - group.dy)
+    group.dx = movedX
+    group.dy = movedY
   }
   const stop = () => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', stop)
     window.removeEventListener('pointercancel', stop)
     if (alignmentGuides.value.length) alignmentGuides.value = []
+    if (dragging && group?.nodes.length) {
+      const wasAutoLayout = autoLayout.value
+      autoLayout.value = false
+      updateSides(group.nodes.map((node) => node.id))
+      if (wasAutoLayout) notify('Auto layout off — nodes stay where you put them')
+    }
     record(before)
   }
   window.addEventListener('pointermove', move)
@@ -1683,7 +1822,7 @@ function dragFreeMark(event, mark, update) {
   window.addEventListener('pointercancel', stop)
 }
 
-function moveFreeObject(item, origin, dx, dy, event, width, height) {
+function moveFreeObject(item, origin, dx, dy, event, width, height, excluded) {
   const rect = { x: origin.x + dx, y: origin.y + dy, width, height }
   if (!event.shiftKey) {
     if (alignmentGuides.value.length) alignmentGuides.value = []
@@ -1697,6 +1836,7 @@ function moveFreeObject(item, origin, dx, dy, event, width, height) {
     freeTexts.value,
     8 / viewport.value.zoom,
     400 / viewport.value.zoom,
+    excluded,
   )
   alignmentGuides.value = snapped.guides
   return { x: snapped.x, y: snapped.y }
@@ -1704,8 +1844,11 @@ function moveFreeObject(item, origin, dx, dy, event, width, height) {
 
 function onMarkPointerDown(event, mark) {
   if (event.button) return
-  selectMark(mark.id)
-  dragFreeMark(event, mark, (origin, dx, dy, moved) => moveFreeObject(mark, origin, dx, dy, moved, origin.size, origin.size))
+  if (!selectedMarkIds.value.has(mark.id)) selectMark(mark.id)
+  const group = freeDragGroup(mark)
+  dragFreeMark(event, mark, (origin, dx, dy, moved) => moveFreeObject(
+    mark, origin, dx, dy, moved, origin.size, origin.size, group.excluded,
+  ), group)
 }
 
 function onMarkHandleDown(event, sx, sy) {
@@ -1734,14 +1877,19 @@ function selectFreeText(id) {
   selectedTextId.value = id
 }
 
-function editFreeText(id, before = snapshot()) {
+function editFreeText(id, before = snapshot(), initialText = null) {
   const text = freeTexts.value.find((item) => item.id === id)
   if (!text) return
   selectFreeText(id)
   editingTextId.value = id
-  textDraft.value = text.text
+  textDraft.value = initialText ?? text.text
   textEditStart = before
-  nextTick(() => document.querySelector(`[data-text-editor="${CSS.escape(id)}"]`)?.select())
+  nextTick(() => {
+    const editor = document.querySelector(`[data-text-editor="${CSS.escape(id)}"]`)
+    editor?.focus()
+    if (initialText === null) editor?.select()
+    else editor?.setSelectionRange(initialText.length, initialText.length)
+  })
 }
 
 function finishFreeTextEditing(save = true) {
@@ -1765,7 +1913,8 @@ function onCanvasDoubleClick(event) {
 
 function onTextPointerDown(event, text) {
   if (event.button) return
-  selectFreeText(text.id)
+  if (!selectedTextIds.value.has(text.id)) selectFreeText(text.id)
+  const group = freeDragGroup(text)
   dragFreeMark(event, text, (origin, dx, dy, moved) => moveFreeObject(
     text,
     origin,
@@ -1774,18 +1923,12 @@ function onTextPointerDown(event, text) {
     moved,
     origin.size * FREE_TEXT_SIZE.width,
     origin.size * FREE_TEXT_SIZE.height,
-  ))
+    group.excluded,
+  ), group)
 }
 
 function onTextHandleDown(event, sx, sy) {
   dragFreeMark(event, selectedText.value, (origin, dx, dy) => resizeFreeText(origin, sx, sy, dx, dy))
-}
-
-function removeFreeText() {
-  const before = snapshot()
-  freeTexts.value = freeTexts.value.filter((text) => text.id !== selectedTextId.value)
-  selectedTextId.value = null
-  record(before)
 }
 
 function duplicateFreeText() {
@@ -1796,14 +1939,6 @@ function duplicateFreeText() {
   selectFreeText(copy.id)
   record(before)
 }
-
-// Picking a node lets go of the free canvas objects and of the link, and the other way round.
-watch(selectedCount, (count) => {
-  if (count) {
-    finishFreeTextEditing()
-    selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
-  }
-})
 
 // Links outside the tree (9a). Like free marks they are their own list, outside layout and Vue Flow;
 // they are drawn above the tree lines and below the nodes.
@@ -1924,7 +2059,14 @@ const onLinkModifierKeyup = (event) => aimLink(hasLinkMod(event))
 const clearLinkModifier = () => aimLink(false)
 
 function onCanvasPointerDown(event) {
-  if (event.button || !hasLinkMod(event) || !linkHover.value || event.target.closest?.('.node-actions')) return
+  if (event.button) return
+  const pressedNode = nodesById.value.get(event.target.closest?.('.vue-flow__node')?.dataset.id)
+  if (pressedNode && !pressedNode.selected) {
+    finishFreeTextEditing()
+    clearFreeSelection()
+    selectedLinkId.value = null
+  }
+  if (!hasLinkMod(event) || !linkHover.value || event.target.closest?.('.node-actions')) return
   // Cancelled, the press starts neither a node drag nor a selection box. The click that follows a press
   // without a drag still reaches the block, so Shift + click selects as before.
   event.preventDefault()
@@ -2618,7 +2760,7 @@ function runShortcut(id, event) {
     case 'addChild': return addChild()
     case 'addSibling': return selectedLink.value ? editLinkLabel() : addSibling()
     case 'navigate': return navigateNodes(event.key)
-    case 'remove': return selectedText.value ? removeFreeText() : selectedMark.value ? removeFreeMark() : selectedLink.value ? removeLink() : removeSelected()
+    case 'remove': return selectedLink.value ? removeLink() : removeSelected()
     case 'marks': return toggleMarks()
     case 'mark': return applyMark(MARKS.find((mark) => mark.key === event.key).id)
     case 'duplicateMark': return selectedText.value ? duplicateFreeText() : duplicateFreeMark()
@@ -2626,12 +2768,13 @@ function runShortcut(id, event) {
     case 'expand': return setCollapsed(selectedNodes.value.map((node) => node.id), id === 'collapse')
     case 'help': return openHelp(event.target)
     case 'theme': return cycleTheme()
-    case 'selectAll': return selectAllCanvasNodes(nodes.value)
+    case 'selectAll': return selectAllCanvas()
     case 'deselect':
       contextMenu.value = null
       closeMenus()
       for (const node of nodes.value) node.selected = false
-      selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
+      clearFreeSelection()
+      selectedLinkId.value = null
   }
 }
 
@@ -2688,9 +2831,12 @@ function onKeydown(event) {
     // keys, so do not let the event reach the canvas' node handler.
     if (shortcut.id === 'navigate') event.stopPropagation()
     runShortcut(shortcut.id, event)
-  } else if (selectedNodes.value.length === 1 && event.key.length === 1 && !event.altKey && !event.metaKey && !event.ctrlKey && event.key !== ' ') {
+  } else if (event.key.length === 1 && !event.altKey && !event.metaKey && !event.ctrlKey && event.key !== ' ') {
+    const editTarget = typingTarget(selectedNodes.value, selectedMarkIds.value, selectedTextIds.value)
+    if (!editTarget) return
     event.preventDefault()
-    focusEditor(primaryNode.value.id, event.key)
+    if (editTarget.type === 'node') focusEditor(editTarget.id, event.key)
+    else editFreeText(editTarget.id, snapshot(), event.key)
   }
 }
 
@@ -2781,7 +2927,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown, true)
   window.addEventListener('keyup', onLinkModifierKeyup)
   window.addEventListener('blur', clearLinkModifier)
-  window.addEventListener('pointerdown', onWindowPointerDown)
+  window.addEventListener('pointerdown', onWindowPointerDown, true)
   window.addEventListener('copy', onCopy)
   window.addEventListener('paste', onPaste)
   window.addEventListener('pagehide', persistDocuments)
@@ -2806,7 +2952,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown, true)
   window.removeEventListener('keyup', onLinkModifierKeyup)
   window.removeEventListener('blur', clearLinkModifier)
-  window.removeEventListener('pointerdown', onWindowPointerDown)
+  window.removeEventListener('pointerdown', onWindowPointerDown, true)
   window.removeEventListener('copy', onCopy)
   window.removeEventListener('paste', onPaste)
   window.removeEventListener('pagehide', persistDocuments)
@@ -2851,10 +2997,13 @@ onBeforeUnmount(() => {
           @node-drag-start="onNodeDragStart"
           @node-drag="onNodeDrag"
           @node-drag-stop="onNodeDragStop"
+          @node-click="onNodeClick"
           @node-double-click="({ node }) => focusEditor(node.id)"
           @node-context-menu="showNodeMenu"
           @edge-click="selectedMarkId = selectedLinkId = selectedTextId = null"
           @pane-click="closeOverlays"
+          @selection-start="onCanvasSelectionStart"
+          @selection-end="onCanvasSelectionEnd"
         >
           <template #zoom-pane>
             <svg class="link-layer">
@@ -2902,6 +3051,7 @@ onBeforeUnmount(() => {
               v-for="mark in freeMarks"
               :key="mark.id"
               class="free-mark nopan"
+              :class="{ selected: selectedMarkIds.has(mark.id) }"
               :style="{ left: `${mark.x}px`, top: `${mark.y}px`, width: `${mark.size}px`, height: `${mark.size}px` }"
               @pointerdown="onMarkPointerDown($event, mark)"
             ><MarkIcon :id="mark.mark" :size="mark.size" /></div>
@@ -2909,7 +3059,7 @@ onBeforeUnmount(() => {
               v-for="text in freeTexts"
               :key="text.id"
               class="free-text nopan"
-              :class="{ selected: text.id === selectedTextId, editing: text.id === editingTextId }"
+              :class="{ selected: selectedTextIds.has(text.id), editing: text.id === editingTextId }"
               :style="{
                 left: `${text.x}px`,
                 top: `${text.y}px`,

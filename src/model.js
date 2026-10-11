@@ -157,6 +157,25 @@ export function resizeFreeText(text, sx, sy, dx, dy, step = 1) {
   }
 }
 
+export function freeObjectIdsInRect(rect, freeMarks, freeTexts) {
+  const contains = (item, width, height) => item.x >= rect.x && item.y >= rect.y
+    && item.x + width <= rect.x + rect.width && item.y + height <= rect.y + rect.height
+  return {
+    markIds: freeMarks.filter((mark) => contains(mark, mark.size, mark.size)).map((mark) => mark.id),
+    textIds: freeTexts
+      .filter((text) => contains(text, text.size * FREE_TEXT_SIZE.width, text.size * FREE_TEXT_SIZE.height))
+      .map((text) => text.id),
+  }
+}
+
+export function translateCanvasObjects(nodes, freeObjects, dx, dy) {
+  for (const node of nodes) node.position = { x: node.position.x + dx, y: node.position.y + dy }
+  for (const item of freeObjects) {
+    item.x += dx
+    item.y += dy
+  }
+}
+
 export function normalizeFreeMarks(input) {
   if (!Array.isArray(input)) return []
   const ids = new Set()
@@ -521,16 +540,16 @@ export function snapNode(rect, candidates, threshold, maxDistance) {
 
 export const DEFAULT_SIZE = { width: 180, height: 30, rootWidth: 200, rootHeight: 56 }
 
-export function snapFreeObject(rect, moving, nodes, freeMarks, freeTexts, threshold, maxDistance) {
+export function snapFreeObject(rect, moving, nodes, freeMarks, freeTexts, threshold, maxDistance, excluded = new Set([moving])) {
   const candidates = [
-    ...nodes.filter((node) => !node.hidden).map((node) => ({
+    ...nodes.filter((node) => !node.hidden && !excluded.has(node)).map((node) => ({
       x: node.position.x,
       y: node.position.y,
       width: node.dimensions?.width || (node.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width),
       height: node.dimensions?.height || (node.data.root ? DEFAULT_SIZE.rootHeight : DEFAULT_SIZE.height),
     })),
-    ...freeMarks.filter((mark) => mark !== moving).map((mark) => ({ x: mark.x, y: mark.y, width: mark.size, height: mark.size })),
-    ...freeTexts.filter((text) => text !== moving).map((text) => ({
+    ...freeMarks.filter((mark) => !excluded.has(mark)).map((mark) => ({ x: mark.x, y: mark.y, width: mark.size, height: mark.size })),
+    ...freeTexts.filter((text) => !excluded.has(text)).map((text) => ({
       x: text.x,
       y: text.y,
       width: text.size * FREE_TEXT_SIZE.width,

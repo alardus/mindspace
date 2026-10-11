@@ -6,6 +6,7 @@ import {
   MINDSPACE_CLIPBOARD_TYPE,
   assertClipboardAssetCapacity,
   assertClipboardCapacity,
+  assertFreeObjectCapacity,
   clipboardImageFiles,
   isEditableClipboardTarget,
   parseClipboardData,
@@ -92,6 +93,43 @@ test('remaps every node and edge id on parse', () => {
   ])
   assert.deepEqual(fragment.links, [{ id: 'new-4', from: 'new-2', to: 'new-1', arrows: 'none' }])
   assert.equal(fragment.source, 'mindspace')
+})
+
+test('copies, remaps and translates a mixed canvas selection', () => {
+  const root = makeNode('Root', { x: 0, y: 0 }, { id: 'root', root: true })
+  const serialized = serializeClipboardBranches([root], [], ['root'], [], {
+    freeMarks: [{ id: 'mark', mark: 'done', x: 240, y: 20, size: 28 }],
+    freeTexts: [{ id: 'text', text: 'Caption', x: 100, y: 100, size: 10 }],
+    selectedMarkIds: ['mark'],
+    selectedTextIds: ['text'],
+  })
+  const payload = JSON.parse(serialized.custom)
+
+  assert.deepEqual(payload.freeMarks, [{ id: 'mark', mark: 'done', x: 240, y: 20, size: 28 }])
+  assert.deepEqual(payload.freeTexts, [{ id: 'text', text: 'Caption', x: 100, y: 100, size: 10 }])
+  assert.equal(serialized.count, 3)
+  assert.equal(serialized.text, 'Root\nCaption')
+
+  const fragment = parseMindspaceClipboard(serialized.custom, ids())
+  assert.deepEqual(fragment.freeMarks, [{ id: 'new-2', mark: 'done', x: 240, y: 20, size: 28 }])
+  assert.deepEqual(fragment.freeTexts, [{ id: 'new-3', text: 'Caption', x: 100, y: 100, size: 10 }])
+
+  const translated = translateClipboardFragment(fragment, { x: 500, y: 500 })
+  assert.deepEqual(translated.nodes[0].position, { x: 366, y: 432.5 })
+  assert.deepEqual([translated.freeMarks[0].x, translated.freeMarks[0].y], [606, 452.5])
+  assert.deepEqual([translated.freeTexts[0].x, translated.freeTexts[0].y], [466, 532.5])
+})
+
+test('accepts a Mindspace clipboard containing only free canvas objects', () => {
+  const serialized = serializeClipboardBranches([], [], [], [], {
+    freeMarks: [{ id: 'mark', mark: 'idea', x: 10, y: 20, size: 28 }],
+    selectedMarkIds: ['mark'],
+  })
+
+  const fragment = parseMindspaceClipboard(serialized.custom, ids())
+
+  assert.deepEqual(fragment.nodes, [])
+  assert.deepEqual(fragment.freeMarks, [{ id: 'new-1', mark: 'idea', x: 10, y: 20, size: 28 }])
 })
 
 test('normalizes broken and cyclic tree edges to a finite forest', () => {
@@ -303,6 +341,12 @@ test('fits an imported group without changing relative positions', () => {
 test('refuses a fragment that would exceed the map limit', () => {
   assert.doesNotThrow(() => assertClipboardCapacity(4999, 1))
   assert.throws(() => assertClipboardCapacity(4999, 2), /5,000 blocks/)
+})
+
+test('refuses free canvas objects that would be truncated on save', () => {
+  assert.doesNotThrow(() => assertFreeObjectCapacity(999, 1, 'icons'))
+  assert.throws(() => assertFreeObjectCapacity(1000, 1, 'icons'), /1,000 icons/)
+  assert.throws(() => assertFreeObjectCapacity(1000, 1, 'text blocks'), /1,000 text blocks/)
 })
 
 test('refuses clipboard images that would exceed the asset limit', () => {

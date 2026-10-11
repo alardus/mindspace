@@ -715,6 +715,34 @@ test('a free text block starts with default text centered at the requested point
   })
 })
 
+test('box selection fully contains free icons and text like Vue Flow nodes', () => {
+  const selected = mapModel.freeObjectIdsInRect?.(
+    { x: 10, y: 10, width: 100, height: 80 },
+    [
+      { id: 'inside-mark', x: 20, y: 20, size: 28 },
+      { id: 'partial-mark', x: 100, y: 20, size: 28 },
+    ],
+    [
+      { id: 'inside-text', x: 20, y: 20, size: 8 },
+      { id: 'partial-text', x: 40, y: 60, size: 16 },
+    ],
+  )
+
+  assert.deepEqual(selected, { markIds: ['inside-mark'], textIds: ['inside-text'] })
+})
+
+test('a mixed canvas selection moves every kind of block by the same delta', () => {
+  const node = makeNode('Node', { x: 10, y: 20 })
+  const mark = { id: 'mark', mark: 'done', x: 30, y: 40, size: 28 }
+  const text = { id: 'text', text: 'Text', x: 50, y: 60, size: 16 }
+
+  mapModel.translateCanvasObjects?.([node], [mark, text], 15, -5)
+
+  assert.deepEqual(node.position, { x: 25, y: 15 })
+  assert.deepEqual([mark.x, mark.y], [45, 35])
+  assert.deepEqual([text.x, text.y], [65, 55])
+})
+
 test('free text blocks survive a save and load while invalid entries are skipped', () => {
   const map = normalizeMap({
     version: 2,
