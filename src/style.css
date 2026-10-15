@@ -548,6 +548,9 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 .mind-flow .vue-flow__node-mind:not(.selected) { z-index: 1 !important; }
 .free-mark { position: absolute; border-radius: 50%; box-shadow: 0 0 0 2px var(--canvas), 0 3px 8px rgba(30, 32, 28, .18); cursor: grab; pointer-events: all; touch-action: none; user-select: none; }
 :root[data-theme="dark"] .free-mark { box-shadow: 0 0 0 2px var(--canvas); }
+.free-text { position: absolute; display: grid; place-items: center; box-sizing: border-box; padding: .5em; overflow: hidden; color: var(--ink); background: transparent; border: 1px solid var(--border-strong); cursor: grab; font-weight: 500; line-height: 1.2; overflow-wrap: anywhere; pointer-events: all; text-align: center; touch-action: none; user-select: none; white-space: pre-wrap; }
+.free-mark.selected, .free-text.selected { outline: 1.5px solid var(--ink); outline-offset: 4px; }
+.free-text textarea { width: 100%; height: 100%; padding: 0; overflow: hidden; color: inherit; background: transparent; border: 0; outline: 0; resize: none; cursor: text; font: inherit; line-height: inherit; text-align: inherit; user-select: text; }
 /* The size is in map units and scales with the zoom; the frame, handles and badge are in screen pixels. */
 .mark-frame { position: absolute; z-index: 5; border: 1.5px solid var(--ink); border-radius: 4px; pointer-events: none; }
 .mark-handle { position: absolute; width: 9px; height: 9px; background: var(--surface); border: 1.5px solid var(--ink); border-radius: 2px; pointer-events: auto; touch-action: none; transform: translate(-50%, -50%); }

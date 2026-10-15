@@ -91,9 +91,20 @@ test('select all targets every visible canvas block', () => {
     { id: 'visible', hidden: false, selected: false },
     { id: 'hidden', hidden: true, selected: true },
   ]
-  assert.equal(typeof shortcuts.selectAllCanvasNodes, 'function')
-  shortcuts.selectAllCanvasNodes?.(nodes)
+  const selected = shortcuts.selectAllCanvasObjects?.(
+    nodes,
+    [{ id: 'mark-1' }, { id: 'mark-2' }],
+    [{ id: 'text-1' }],
+  )
   assert.deepEqual(nodes.map((node) => node.selected), [true, false])
+  assert.deepEqual(selected, { markIds: ['mark-1', 'mark-2'], textIds: ['text-1'] })
+})
+
+test('typing targets one text block but not a mixed canvas selection', () => {
+  assert.deepEqual(shortcuts.typingTarget?.([], new Set(), new Set(['text-1'])), { type: 'text', id: 'text-1' })
+  assert.deepEqual(shortcuts.typingTarget?.([{ id: 'node-1' }], new Set(), new Set()), { type: 'node', id: 'node-1' })
+  assert.equal(shortcuts.typingTarget?.([], new Set(['mark-1']), new Set()), null)
+  assert.equal(shortcuts.typingTarget?.([{ id: 'node-1' }], new Set(), new Set(['text-1'])), null)
 })
 
 test('icon keys are bare: digits and I, never with a modifier', () => {

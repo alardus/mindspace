@@ -631,6 +631,18 @@ test('equal vertical gaps use horizontal markers', () => {
   ])
 })
 
+test('free objects snap to visible blocks, icons and text, but not themselves', () => {
+  const moving = { id: 'moving', x: 94, y: 80, size: 20 }
+  const hidden = { id: 'hidden', hidden: true, position: { x: 95, y: 0 }, dimensions: { width: 20, height: 20 }, data: {} }
+  const block = { id: 'block', position: { x: 100, y: 0 }, dimensions: { width: 20, height: 20 }, data: {} }
+  const icon = { id: 'icon', x: 200, y: 0, size: 20 }
+  const text = { id: 'text', x: 300, y: 0, size: 2 }
+
+  assert.equal(mapModel.snapFreeObject({ x: 94, y: 80, width: 20, height: 20 }, moving, [hidden, block], [moving], [], 8, 400).x, 100)
+  assert.equal(mapModel.snapFreeObject({ x: 194, y: 80, width: 20, height: 20 }, moving, [], [moving, icon], [], 8, 400).x, 200)
+  assert.equal(mapModel.snapFreeObject({ x: 294, y: 80, width: 20, height: 20 }, moving, [], [moving], [text], 8, 400).x, 300)
+})
+
 test('node marks keep the set order, one status at most, and toggle across a selection', () => {
   const { MARKS, normalizeMarks, toggleMark } = mapModel
   assert.deepEqual(MARKS.map((mark) => mark.key).join(''), '1234567890')
@@ -681,6 +693,76 @@ test('free mark resize keeps the opposite corner, the 16–128 range and the Shi
   assert.deepEqual([smallest.size, ...far(smallest)], [16, ...far(mark)])
   assert.equal(resizeFreeMark(mark, 1, 1, 7.4, 7.4).size, 47)
   assert.equal(resizeFreeMark(mark, 1, 1, 7.4, 7.4, 8).size, 48)
+})
+
+test('free text resize scales its frame and font while keeping the opposite corner still', () => {
+  const resizeFreeText = mapModel.resizeFreeText ?? (() => ({ size: 0 }))
+  const text = { id: 't', text: 'Text', x: 100, y: 200, size: 16 }
+
+  assert.deepEqual(resizeFreeText(text, 1, 1, 40, 14), { ...text, size: 20 })
+  assert.deepEqual(resizeFreeText(text, -1, -1, -40, -14), { ...text, x: 60, y: 186, size: 20 })
+})
+
+test('a free text block starts with default text centered at the requested point', () => {
+  const makeFreeText = mapModel.makeFreeText ?? (() => ({}))
+
+  assert.deepEqual(makeFreeText({ x: 180, y: 128 }, 't1'), {
+    id: 't1',
+    text: 'Text',
+    x: 100,
+    y: 100,
+    size: 16,
+  })
+})
+
+test('box selection fully contains free icons and text like Vue Flow nodes', () => {
+  const selected = mapModel.freeObjectIdsInRect?.(
+    { x: 10, y: 10, width: 100, height: 80 },
+    [
+      { id: 'inside-mark', x: 20, y: 20, size: 28 },
+      { id: 'partial-mark', x: 100, y: 20, size: 28 },
+    ],
+    [
+      { id: 'inside-text', x: 20, y: 20, size: 8 },
+      { id: 'partial-text', x: 40, y: 60, size: 16 },
+    ],
+  )
+
+  assert.deepEqual(selected, { markIds: ['inside-mark'], textIds: ['inside-text'] })
+})
+
+test('a mixed canvas selection moves every kind of block by the same delta', () => {
+  const node = makeNode('Node', { x: 10, y: 20 })
+  const mark = { id: 'mark', mark: 'done', x: 30, y: 40, size: 28 }
+  const text = { id: 'text', text: 'Text', x: 50, y: 60, size: 16 }
+
+  mapModel.translateCanvasObjects?.([node], [mark, text], 15, -5)
+
+  assert.deepEqual(node.position, { x: 25, y: 15 })
+  assert.deepEqual([mark.x, mark.y], [45, 35])
+  assert.deepEqual([text.x, text.y], [65, 55])
+})
+
+test('free text blocks survive a save and load while invalid entries are skipped', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: [{ id: 'root', data: { label: 'Root' } }],
+    edges: [],
+    freeTexts: [
+      { id: 't1', text: ' Caption ', x: 10, y: 20, size: 500 },
+      { id: 't1', text: 'Text', x: 0, y: 0 },
+      { id: 'empty', text: '   ', x: 0, y: 0, size: 16 },
+      { id: 'bad-position', text: 'Text', x: 'left', y: 0, size: 16 },
+    ],
+  })
+  const texts = map.freeTexts ?? []
+
+  assert.deepEqual(texts[0], { id: 't1', text: 'Caption', x: 10, y: 20, size: 48 })
+  assert.equal(texts.length, 2)
+  assert.notEqual(texts[1].id, 't1')
+  assert.equal(texts[1].size, 16)
+  assert.equal('freeTexts' in normalizeMap({ version: 2, nodes: [{ data: { label: 'A' } }], edges: [] }), false)
+  assert.deepEqual(normalizeMap(JSON.parse(JSON.stringify(map))).freeTexts, map.freeTexts)
 })
 
 test('marks survive a save and load, unknown ones are skipped, and text exports prefix the title', () => {

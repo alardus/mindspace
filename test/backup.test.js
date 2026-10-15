@@ -23,6 +23,12 @@ test('what auto-layout derives is not an edit; the same fields placed by hand ar
   assert.notEqual(backupKey(reordered), backupKey({ ...reordered, nodes: [...reordered.nodes].reverse() }))
 })
 
+test('free canvas objects are backup content', () => {
+  const map = { autoLayout: true, nodes: [], edges: [] }
+  assert.notEqual(backupKey(map), backupKey({ ...map, freeMarks: [{ id: 'm1', mark: 'idea', x: 10, y: 20, size: 28 }] }))
+  assert.notEqual(backupKey(map), backupKey({ ...map, freeTexts: [{ id: 't1', text: 'Note', x: 10, y: 20, width: 180, height: 63, fontSize: 16 }] }))
+})
+
 test('remote check accepts metadata-only changes and stops on content or lineage changes', () => {
   const backup = { md5Checksum: 'm1', saveId: 's1' }
   const meta = { md5Checksum: 'm1', version: '9', name: 'Renamed.mindmap', appProperties: { mindspaceSaveId: 's1' }, capabilities: { canEdit: true } }

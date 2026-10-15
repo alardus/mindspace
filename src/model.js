@@ -133,6 +133,49 @@ export function resizeFreeMark(mark, sx, sy, dx, dy, step = 1) {
   return { ...mark, size, x: mark.x + (sx < 0 ? mark.size - size : 0), y: mark.y + (sy < 0 ? mark.size - size : 0) }
 }
 
+export const FREE_TEXT_SIZE = { min: 8, max: 48, initial: 16, width: 10, height: 3.5 }
+const clampFreeTextSize = (size, step = 1) => Math.min(FREE_TEXT_SIZE.max,
+  Math.max(FREE_TEXT_SIZE.min, Math.round(size / step) * step))
+
+export const makeFreeText = (center, id = uid()) => ({
+  id,
+  text: 'Text',
+  x: center.x - FREE_TEXT_SIZE.initial * FREE_TEXT_SIZE.width / 2,
+  y: center.y - FREE_TEXT_SIZE.initial * FREE_TEXT_SIZE.height / 2,
+  size: FREE_TEXT_SIZE.initial,
+})
+
+// Free text keeps its 10:3.5 frame while the font follows the same scale.
+export function resizeFreeText(text, sx, sy, dx, dy, step = 1) {
+  const size = clampFreeTextSize(text.size
+    + (dx * sx / FREE_TEXT_SIZE.width + dy * sy / FREE_TEXT_SIZE.height) / 2, step)
+  return {
+    ...text,
+    size,
+    x: text.x + (sx < 0 ? (text.size - size) * FREE_TEXT_SIZE.width : 0),
+    y: text.y + (sy < 0 ? (text.size - size) * FREE_TEXT_SIZE.height : 0),
+  }
+}
+
+export function freeObjectIdsInRect(rect, freeMarks, freeTexts) {
+  const contains = (item, width, height) => item.x >= rect.x && item.y >= rect.y
+    && item.x + width <= rect.x + rect.width && item.y + height <= rect.y + rect.height
+  return {
+    markIds: freeMarks.filter((mark) => contains(mark, mark.size, mark.size)).map((mark) => mark.id),
+    textIds: freeTexts
+      .filter((text) => contains(text, text.size * FREE_TEXT_SIZE.width, text.size * FREE_TEXT_SIZE.height))
+      .map((text) => text.id),
+  }
+}
+
+export function translateCanvasObjects(nodes, freeObjects, dx, dy) {
+  for (const node of nodes) node.position = { x: node.position.x + dx, y: node.position.y + dy }
+  for (const item of freeObjects) {
+    item.x += dx
+    item.y += dy
+  }
+}
+
 export function normalizeFreeMarks(input) {
   if (!Array.isArray(input)) return []
   const ids = new Set()
@@ -141,6 +184,18 @@ export function normalizeFreeMarks(input) {
     const id = typeof item.id === 'string' && item.id && !ids.has(item.id) ? item.id : uid()
     ids.add(id)
     return [{ id, mark: item.mark, x: item.x, y: item.y, size: clampMarkSize(Number.isFinite(item.size) ? item.size : MARK_SIZE.initial) }]
+  })
+}
+
+export function normalizeFreeTexts(input) {
+  if (!Array.isArray(input)) return []
+  const ids = new Set()
+  return input.slice(0, 1000).flatMap((item) => {
+    const text = typeof item?.text === 'string' ? item.text.trim().slice(0, MAX_LABEL_LENGTH) : ''
+    if (!text || !Number.isFinite(item.x) || !Number.isFinite(item.y)) return []
+    const id = typeof item.id === 'string' && item.id && !ids.has(item.id) ? item.id : uid()
+    ids.add(id)
+    return [{ id, text, x: item.x, y: item.y, size: clampFreeTextSize(Number.isFinite(item.size) ? item.size : FREE_TEXT_SIZE.initial) }]
   })
 }
 
@@ -485,6 +540,25 @@ export function snapNode(rect, candidates, threshold, maxDistance) {
 
 export const DEFAULT_SIZE = { width: 180, height: 30, rootWidth: 200, rootHeight: 56 }
 
+export function snapFreeObject(rect, moving, nodes, freeMarks, freeTexts, threshold, maxDistance, excluded = new Set([moving])) {
+  const candidates = [
+    ...nodes.filter((node) => !node.hidden && !excluded.has(node)).map((node) => ({
+      x: node.position.x,
+      y: node.position.y,
+      width: node.dimensions?.width || (node.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width),
+      height: node.dimensions?.height || (node.data.root ? DEFAULT_SIZE.rootHeight : DEFAULT_SIZE.height),
+    })),
+    ...freeMarks.filter((mark) => !excluded.has(mark)).map((mark) => ({ x: mark.x, y: mark.y, width: mark.size, height: mark.size })),
+    ...freeTexts.filter((text) => !excluded.has(text)).map((text) => ({
+      x: text.x,
+      y: text.y,
+      width: text.size * FREE_TEXT_SIZE.width,
+      height: text.size * FREE_TEXT_SIZE.height,
+    })),
+  ]
+  return snapNode(rect, candidates, threshold, maxDistance)
+}
+
 export function layoutVerticalGap(settings = DEFAULT_SETTINGS) {
   return 18 * DENSITY[normalizeSettings(settings).density]
 }
@@ -680,6 +754,8 @@ export function normalizeMap(input) {
   }
   const freeMarks = normalizeFreeMarks(input.freeMarks)
   if (freeMarks.length) map.freeMarks = freeMarks
+  const freeTexts = normalizeFreeTexts(input.freeTexts)
+  if (freeTexts.length) map.freeTexts = freeTexts
   if (links.length) map.links = links
   // Positions from pre-redesign maps assume fixed-width nodes — they need a one-time re-layout.
   if (input.version !== 2 && input.version !== 3) Object.defineProperty(map, 'needsLayout', { value: true })

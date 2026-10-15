@@ -1,4 +1,15 @@
-import { DEFAULT_SIZE, MAX_LABEL_LENGTH, descendantsOf, makeEdge, makeNode, normalizeLinks, selectedBranchRoots } from './model.js'
+import {
+  DEFAULT_SIZE,
+  FREE_TEXT_SIZE,
+  MAX_LABEL_LENGTH,
+  descendantsOf,
+  makeEdge,
+  makeNode,
+  normalizeFreeMarks,
+  normalizeFreeTexts,
+  normalizeLinks,
+  selectedBranchRoots,
+} from './model.js'
 
 export const MINDSPACE_CLIPBOARD_TYPE = 'application/x-mindspace-branch+json'
 
@@ -8,6 +19,10 @@ export const isEditableClipboardTarget = (target) => Boolean(target?.closest?.('
 
 export function assertClipboardCapacity(currentCount, incomingCount, limit = 5000) {
   if (currentCount + incomingCount > limit) throw new ClipboardPayloadError('A map can contain up to 5,000 blocks')
+}
+
+export function assertFreeObjectCapacity(currentCount, incomingCount, label, limit = 1000) {
+  if (currentCount + incomingCount > limit) throw new ClipboardPayloadError(`A map can contain up to 1,000 ${label}`)
 }
 
 export function assertClipboardAssetCapacity(existingIds, incomingIds, limit = 100) {
@@ -66,7 +81,10 @@ function outlineText(nodes, edges, roots) {
 }
 
 // Links travel with a copy only when both of their blocks do.
-export function serializeClipboardBranches(nodes, edges, selectedIds, links = []) {
+export function serializeClipboardBranches(nodes, edges, selectedIds, links = [], freeSelection = {}) {
+  const {
+    freeMarks = [], freeTexts = [], selectedMarkIds = [], selectedTextIds = [],
+  } = freeSelection
   const existing = new Set(nodes.map((node) => node.id))
   const selected = [...new Set(selectedIds)].filter((id) => existing.has(id))
   const roots = selectedBranchRoots(selected, edges)
@@ -76,11 +94,23 @@ export function serializeClipboardBranches(nodes, edges, selectedIds, links = []
     .filter((edge) => included.has(edge.source) && included.has(edge.target))
     .map(cleanEdge)
   const copiedLinks = links.filter((link) => included.has(link.from) && included.has(link.to)).map((link) => ({ ...link }))
-  const payload = { version: 1, roots, nodes: copiedNodes, edges: copiedEdges, ...(copiedLinks.length ? { links: copiedLinks } : {}) }
+  const markIds = new Set(selectedMarkIds)
+  const textIds = new Set(selectedTextIds)
+  const copiedMarks = freeMarks.filter((mark) => markIds.has(mark.id)).map((mark) => ({ ...mark }))
+  const copiedTexts = freeTexts.filter((text) => textIds.has(text.id)).map((text) => ({ ...text }))
+  const payload = {
+    version: 1,
+    roots,
+    nodes: copiedNodes,
+    edges: copiedEdges,
+    ...(copiedLinks.length ? { links: copiedLinks } : {}),
+    ...(copiedMarks.length ? { freeMarks: copiedMarks } : {}),
+    ...(copiedTexts.length ? { freeTexts: copiedTexts } : {}),
+  }
   return {
     custom: JSON.stringify(payload),
-    text: outlineText(copiedNodes, copiedEdges, roots),
-    count: copiedNodes.length,
+    text: [outlineText(copiedNodes, copiedEdges, roots), ...copiedTexts.map((text) => text.text)].filter(Boolean).join('\n'),
+    count: copiedNodes.length + copiedMarks.length + copiedTexts.length,
   }
 }
 
@@ -114,7 +144,7 @@ export function parseMindspaceClipboard(json, createId = uid) {
   } catch {
     throw new Error('The copied Mindspace branch is invalid')
   }
-  if (input?.version !== 1 || !Array.isArray(input.nodes) || !input.nodes.length
+  if (input?.version !== 1 || !Array.isArray(input.nodes)
     || input.nodes.length > 5000 || !Array.isArray(input.edges) || input.edges.length > 10000) {
     throw new Error('The copied Mindspace branch is invalid')
   }
@@ -131,7 +161,9 @@ export function parseMindspaceClipboard(json, createId = uid) {
     originalIds.add(item.id)
     sourceNodes.push(node)
   }
-  if (!sourceNodes.length) throw new Error('The copied Mindspace branch is invalid')
+  const sourceMarks = normalizeFreeMarks(input.freeMarks)
+  const sourceTexts = normalizeFreeTexts(input.freeTexts)
+  if (!sourceNodes.length && !sourceMarks.length && !sourceTexts.length) throw new Error('The copied Mindspace branch is invalid')
   const sourceEdges = normalizedEdges(input.edges, originalIds)
   const childIds = new Set(sourceEdges.filter((edge) => edge.data.kind === 'tree').map((edge) => edge.target))
   const idMap = new Map(sourceNodes.map((node) => [node.id, createId()]))
@@ -143,24 +175,41 @@ export function parseMindspaceClipboard(json, createId = uid) {
   const edges = sourceEdges.map((edge) => makeEdge(idMap.get(edge.source), idMap.get(edge.target), createId()))
   const links = normalizeLinks(input.links, originalIds)
     .map((link) => ({ ...link, id: createId(), from: idMap.get(link.from), to: idMap.get(link.to) }))
+  const freeMarks = sourceMarks.map((mark) => ({ ...mark, id: createId() }))
+  const freeTexts = sourceTexts.map((text) => ({ ...text, id: createId() }))
   return {
     source: 'mindspace',
     roots: sourceNodes.filter((node) => !childIds.has(node.id)).map((node) => idMap.get(node.id)),
     nodes,
     edges,
     links,
+    freeMarks,
+    freeTexts,
   }
 }
 
 export function translateClipboardFragment(fragment, center) {
-  const bounds = fragment.nodes.reduce((result, node) => {
-    const width = node.dimensions?.width || (node.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width)
-    const height = node.dimensions?.height || (node.data.root ? DEFAULT_SIZE.rootHeight : DEFAULT_SIZE.height)
+  const boxes = [
+    ...fragment.nodes.map((node) => ({
+      x: node.position.x,
+      y: node.position.y,
+      width: node.dimensions?.width || (node.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width),
+      height: node.dimensions?.height || (node.data.root ? DEFAULT_SIZE.rootHeight : DEFAULT_SIZE.height),
+    })),
+    ...(fragment.freeMarks ?? []).map((mark) => ({ x: mark.x, y: mark.y, width: mark.size, height: mark.size })),
+    ...(fragment.freeTexts ?? []).map((text) => ({
+      x: text.x,
+      y: text.y,
+      width: text.size * FREE_TEXT_SIZE.width,
+      height: text.size * FREE_TEXT_SIZE.height,
+    })),
+  ]
+  const bounds = boxes.reduce((result, box) => {
     return {
-      minX: Math.min(result.minX, node.position.x),
-      minY: Math.min(result.minY, node.position.y),
-      maxX: Math.max(result.maxX, node.position.x + width),
-      maxY: Math.max(result.maxY, node.position.y + height),
+      minX: Math.min(result.minX, box.x),
+      minY: Math.min(result.minY, box.y),
+      maxX: Math.max(result.maxX, box.x + box.width),
+      maxY: Math.max(result.maxY, box.y + box.height),
     }
   }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity })
   const dx = center.x - (bounds.minX + bounds.maxX) / 2
@@ -171,6 +220,8 @@ export function translateClipboardFragment(fragment, center) {
       ...node,
       position: { x: node.position.x + dx, y: node.position.y + dy },
     })),
+    freeMarks: (fragment.freeMarks ?? []).map((mark) => ({ ...mark, x: mark.x + dx, y: mark.y + dy })),
+    freeTexts: (fragment.freeTexts ?? []).map((text) => ({ ...text, x: text.x + dx, y: text.y + dy })),
   }
 }
 

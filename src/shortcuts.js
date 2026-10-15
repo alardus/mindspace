@@ -91,7 +91,17 @@ export function findShortcut(event) {
   return SHORTCUTS.find((shortcut) => shortcut.match?.(event))
 }
 
-export const selectAllCanvasNodes = (nodes) => nodes.forEach((node) => (node.selected = !node.hidden))
+export function selectAllCanvasObjects(nodes, freeMarks, freeTexts) {
+  nodes.forEach((node) => (node.selected = !node.hidden))
+  return { markIds: freeMarks.map((mark) => mark.id), textIds: freeTexts.map((text) => text.id) }
+}
+
+export function typingTarget(selectedNodes, selectedMarkIds, selectedTextIds) {
+  if (selectedNodes.length + selectedMarkIds.size + selectedTextIds.size !== 1) return null
+  if (selectedNodes.length) return { type: 'node', id: selectedNodes[0].id }
+  if (selectedTextIds.size) return { type: 'text', id: selectedTextIds.values().next().value }
+  return null
+}
 
 export function shortcutKeys(id, mac = IS_MAC) {
   return (SHORTCUTS.find((shortcut) => shortcut.id === id)?.keys ?? []).map((key) => keyLabel(key, mac))
