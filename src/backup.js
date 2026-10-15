@@ -21,8 +21,6 @@ export function remoteCheck(backup, meta) {
   if (meta.capabilities?.canEdit === false) return 'readonly'
   if (!backup) return 'ok'
   const saveId = saveIdOf(meta)
-  // A save of ours that reached Drive although its confirmation never reached the page (closed tab, dropped connection).
-  if (backup.sentSaveId && saveId === backup.sentSaveId) return 'ok'
   return meta.md5Checksum === backup.md5Checksum && saveId === backup.saveId ? 'ok' : 'conflict'
 }
 
@@ -51,6 +49,7 @@ export const DRIVE_MESSAGES = {
   readonly: 'That file is read-only. Choose another file or save to a new one.',
   missing: 'That file is no longer in Google Drive.',
   blocked: 'The browser blocked the Google sign-in window. Allow pop-ups for this site and try again.',
+  invalid: 'Choose a Mindspace .mindmap file.',
   failed: 'Google Drive didn’t respond as expected. Try again.',
 }
 
@@ -204,11 +203,9 @@ async function baseline(drive, meta, now) {
 }
 
 // Every write carries a new save id and the id it replaces. Drive has no compare-and-swap for file content, so the
-// file is read back: a save id that is no longer ours means another device wrote in between.
-// beforeWrite gets the new id while nothing is sent yet, so it can be stored with the map.
-async function write(drive, fileId, { title, blob, parentSaveId, now, beforeWrite }) {
+// file is read back: its lineage and checksum must still match the upload response.
+async function write(drive, fileId, { title, blob, parentSaveId, now }) {
   const saveId = globalThis.crypto.randomUUID()
-  beforeWrite?.(saveId)
   const appProperties = { mindspaceSaveId: saveId, mindspaceParentSaveId: parentSaveId, mindspaceFormat: 'mindmap' }
   const written = fileId
     ? await drive.updateFile(fileId, { blob, appProperties })
@@ -216,7 +213,7 @@ async function write(drive, fileId, { title, blob, parentSaveId, now, beforeWrit
   // If the read-back fails (the sign-in ran out, the network dropped), the answer to the write itself is the baseline:
   // the bytes are in Drive, and not knowing our own save would report it as someone else's next time.
   const meta = await drive.getMetadata(written.id).catch(() => written)
-  if (saveIdOf(meta) !== saveId) return { outcome: 'conflict' }
+  if (saveIdOf(meta) !== saveId || meta.md5Checksum !== written.md5Checksum) return { outcome: 'conflict' }
   return { outcome: 'saved', backup: await baseline(drive, meta, now) }
 }
 
@@ -228,11 +225,11 @@ export async function createBackup(drive, { title, blob, now = Date.now() }) {
 }
 
 // The regular upload: only onto the file as this device last left it.
-export async function pushBackup(drive, backup, { blob, now = Date.now(), beforeWrite }) {
+export async function pushBackup(drive, backup, { blob, now = Date.now() }) {
   const meta = await drive.getMetadata(backup.fileId)
   const check = remoteCheck(backup, meta)
   if (check !== 'ok') return { outcome: check }
-  return write(drive, backup.fileId, { blob, parentSaveId: saveIdOf(meta), now, beforeWrite })
+  return write(drive, backup.fileId, { blob, parentSaveId: saveIdOf(meta), now })
 }
 
 // The user confirmed replacing this file with the local map, whatever it holds.

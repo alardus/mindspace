@@ -19,7 +19,9 @@ const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files'
 const FIELDS = 'id,name,version,md5Checksum,appProperties,trashed,capabilities(canEdit),parents'
 const FOLDER_MIME = 'application/vnd.google-apps.folder'
 // A .mindmap uploaded to Drive by hand is plain JSON or a ZIP archive.
-const PICKER_MIME_TYPES = [DRIVE_MIME, 'application/json', 'application/zip'].join(',')
+const PICKER_MIME_TYPES = [DRIVE_MIME, 'application/json', 'application/zip']
+const isMindspaceFile = (file) => typeof file?.id === 'string' && typeof file.name === 'string'
+  && (file.mimeType === DRIVE_MIME || (PICKER_MIME_TYPES.includes(file.mimeType) && /\.mindmap$/i.test(file.name)))
 
 // status: the HTTP status, 0 when Google could not be reached. reason: Drive's own word for a 403.
 // kind: set where there is no status to go by — a closed or blocked sign-in window.
@@ -101,14 +103,18 @@ export async function pickFile() {
   if (!hasToken()) throw new DriveError('Google sign-in is required', { status: 401 })
   await preload()
   const { picker } = globalThis.google
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     new picker.PickerBuilder()
       .setAppId(APP_ID)
       .setDeveloperKey(API_KEY)
       .setOAuthToken(token.value)
-      .addView(new picker.DocsView(picker.ViewId.DOCS).setMimeTypes(PICKER_MIME_TYPES).setMode(picker.DocsViewMode.LIST))
+      .addView(new picker.DocsView(picker.ViewId.DOCS).setMimeTypes(PICKER_MIME_TYPES.join(',')).setMode(picker.DocsViewMode.LIST))
       .setCallback((data) => {
-        if (data.action === picker.Action.PICKED) resolve({ id: data.docs[0].id, name: data.docs[0].name })
+        if (data.action === picker.Action.PICKED) {
+          const file = data.docs?.[0]
+          if (!isMindspaceFile(file)) return reject(new DriveError('Choose a Mindspace .mindmap file', { kind: 'invalid' }))
+          resolve({ id: file.id, name: file.name })
+        }
         else if (data.action === picker.Action.CANCEL) resolve(null)
       })
       .build()

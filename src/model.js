@@ -776,7 +776,6 @@ export function normalizeBackup(value) {
     folder: text('folder'),
     ...(Number.isFinite(value.savedAt) ? { savedAt: value.savedAt } : {}),
     ...(value.pending === true ? { pending: true } : {}),
-    ...(typeof value.sentSaveId === 'string' && value.sentSaveId ? { sentSaveId: value.sentSaveId } : {}),
   }
 }
 

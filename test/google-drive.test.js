@@ -192,6 +192,20 @@ test('the picker gives the chosen file, or nothing when it is closed', async (t)
   assert.equal(await pickFile(), null)
 })
 
+test('the picker refuses unrelated JSON and ZIP files', async (t) => {
+  let document = { id: 'f1', name: 'notes.json', mimeType: 'application/json' }
+  const seen = stubGoogle(t, { pick: (callback) => callback({ action: 'picked', docs: [document] }) })
+  acceptToken({ access_token: 't1', expires_in: 3600 })
+  await assert.rejects(pickFile(), { name: 'DriveError', kind: 'invalid' })
+
+  document = { id: 'f2', name: 'archive.zip', mimeType: 'application/zip' }
+  await assert.rejects(pickFile(), { kind: 'invalid' })
+
+  document = { id: 'f3', name: 'Imported.mindmap', mimeType: 'application/zip' }
+  assert.deepEqual(await pickFile(), { id: 'f3', name: 'Imported.mindmap' })
+  assert.ok(seen.mimeTypes.includes('application/zip'))
+})
+
 test('the Mindspace folder is found by its private mark, and created only when there is none', async (t) => {
   let found = [{ id: 'dir', name: 'Renamed by the user' }]
   const calls = stubFetch(t, (url, init) => (init.method === 'POST' ? json({ id: 'new-dir', name: 'Mindspace' }) : json({ files: found })))

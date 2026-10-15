@@ -2376,11 +2376,6 @@ async function runBackup(id) {
     result = drive.hasToken()
       ? await pushBackup(drive, backup, {
         blob: await createMindmapFile(map, loadImageAsset),
-        // Stored before the bytes go out: if the page closes mid-upload, the save that landed is still known as ours.
-        beforeWrite: (saveId) => {
-          backup.sentSaveId = saveId
-          persistDocuments(false)
-        },
       })
       : { outcome: 'auth' }
   } catch (error) {

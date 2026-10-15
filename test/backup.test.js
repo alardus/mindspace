@@ -41,6 +41,12 @@ test('remote check accepts metadata-only changes and stops on content or lineage
   assert.equal(remoteCheck(null, { ...meta, md5Checksum: 'other' }), 'ok')
 })
 
+test('an uncertain save id does not excuse different Drive content', () => {
+  const backup = { md5Checksum: 'before', saveId: 's1', sentSaveId: 's2' }
+  const meta = { md5Checksum: 'replaced', appProperties: { mindspaceSaveId: 's2' }, capabilities: { canEdit: true } }
+  assert.equal(remoteCheck(backup, meta), 'conflict')
+})
+
 test('errors map to the state the user sees', () => {
   const kinds = [
     [{ status: 401 }, 'auth'], [{ status: 404 }, 'missing'], [{ status: 0 }, 'offline'], [{ status: 503 }, 'offline'], [{ status: 429 }, 'offline'],
@@ -50,7 +56,7 @@ test('errors map to the state the user sees', () => {
     [{ kind: 'cancelled', status: 0 }, 'cancelled'], [{ kind: 'blocked' }, 'blocked'],
   ]
   for (const [error, kind] of kinds) assert.equal(errorKind(error), kind)
-  for (const kind of ['offline', 'quota', 'readonly', 'missing', 'blocked', 'failed']) assert.ok(DRIVE_MESSAGES[kind])
+  for (const kind of ['offline', 'quota', 'readonly', 'missing', 'blocked', 'invalid', 'failed']) assert.ok(DRIVE_MESSAGES[kind])
 })
 
 test('every linked state has its copy; only the three that need a reaction carry an alert', () => {
@@ -266,6 +272,15 @@ test('a write that loses the race is reported as a conflict', async () => {
   assert.equal(file().content, 'theirs')
 })
 
+test('a media-only replacement after upload is reported as a conflict', async () => {
+  const { drive, backup, file } = await linked()
+  drive.afterWrite = (id) => {
+    drive.files.set(id, { ...file(), content: 'theirs', md5Checksum: digest('theirs'), version: '3' })
+  }
+  assert.deepEqual(await pushBackup(drive, backup, { blob: text('mine') }), { outcome: 'conflict' })
+  assert.equal(file().content, 'theirs')
+})
+
 test('a conflicted file can be overwritten on request', async () => {
   const { drive, backup, file } = await linked()
   drive.otherDevice(backup.fileId, 'theirs')
@@ -330,28 +345,20 @@ test('a write whose confirmation fails is still our own save', async () => {
   assert.equal((await pushBackup(drive, result.backup, { blob: text('v3') })).outcome, 'saved')
 })
 
-test('a save that landed as the page closed is not a conflict after the reload', async () => {
+test('an unconfirmed save that landed as the page closed stays conservative after reload', async () => {
   const { drive, backup, file } = await linked()
-  let sent
   // The bytes reach Drive, the answer never reaches the page.
   drive.afterWrite = () => {
     throw Object.assign(new Error('The page is gone'), { status: 0 })
   }
-  await assert.rejects(pushBackup(drive, backup, { blob: text('v2'), beforeWrite: (saveId) => (sent = saveId) }), { status: 0 })
+  await assert.rejects(pushBackup(drive, backup, { blob: text('v2') }), { status: 0 })
   drive.afterWrite = null
   assert.equal(file().content, 'v2')
-  // The id was handed over before the bytes went out, so it could be stored with the map.
-  assert.equal(file().appProperties.mindspaceSaveId, sent)
-  const reloaded = { ...backup, sentSaveId: sent }
+  const reloaded = { ...backup, sentSaveId: file().appProperties.mindspaceSaveId }
   assert.equal(remoteCheck(backup, await drive.getMetadata(backup.fileId)), 'conflict')
-  assert.equal(remoteCheck(reloaded, await drive.getMetadata(backup.fileId)), 'ok')
-  const result = await pushBackup(drive, reloaded, { blob: text('v3') })
-  assert.equal(result.outcome, 'saved')
-  assert.equal(file().appProperties.mindspaceParentSaveId, sent)
-  assert.equal('sentSaveId' in result.backup, false)
-  // Somebody else's save is still somebody else's.
-  drive.otherDevice(backup.fileId, 'theirs')
-  assert.deepEqual(await pushBackup(drive, reloaded, { blob: text('v4') }), { outcome: 'conflict' })
+  assert.equal(remoteCheck(reloaded, await drive.getMetadata(backup.fileId)), 'conflict')
+  assert.deepEqual(await pushBackup(drive, reloaded, { blob: text('v3') }), { outcome: 'conflict' })
+  assert.deepEqual(drive.writes(), [['updateFile', backup.fileId]])
 })
 
 test('what an upload attempt does to a linked map', () => {
