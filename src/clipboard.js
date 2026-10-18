@@ -1,6 +1,5 @@
 import {
   DEFAULT_SIZE,
-  FREE_TEXT_SIZE,
   MAX_LABEL_LENGTH,
   descendantsOf,
   makeEdge,
@@ -200,8 +199,8 @@ export function translateClipboardFragment(fragment, center) {
     ...(fragment.freeTexts ?? []).map((text) => ({
       x: text.x,
       y: text.y,
-      width: text.size * FREE_TEXT_SIZE.width,
-      height: text.size * FREE_TEXT_SIZE.height,
+      width: text.width,
+      height: text.height,
     })),
   ]
   const bounds = boxes.reduce((result, box) => {

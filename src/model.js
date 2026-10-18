@@ -133,27 +133,36 @@ export function resizeFreeMark(mark, sx, sy, dx, dy, step = 1) {
   return { ...mark, size, x: mark.x + (sx < 0 ? mark.size - size : 0), y: mark.y + (sy < 0 ? mark.size - size : 0) }
 }
 
-export const FREE_TEXT_SIZE = { min: 8, max: 48, initial: 16, width: 10, height: 3.5 }
-const clampFreeTextSize = (size, step = 1) => Math.min(FREE_TEXT_SIZE.max,
-  Math.max(FREE_TEXT_SIZE.min, Math.round(size / step) * step))
+export const FREE_TEXT_SIZE = {
+  font: 16, width: 160, height: 56, minWidth: 80, minHeight: 28, maxDimension: 10000, lineHeight: 1.2,
+}
+const LEGACY_FREE_TEXT_SIZE = { min: 8, max: 48, width: 10, height: 3.5 }
+const clampFreeTextDimension = (value, min) => Math.min(FREE_TEXT_SIZE.maxDimension, Math.max(min, value))
+const legacyFreeTextSize = (size) => Math.min(LEGACY_FREE_TEXT_SIZE.max,
+  Math.max(LEGACY_FREE_TEXT_SIZE.min, Number.isFinite(size) ? Math.round(size) : FREE_TEXT_SIZE.font))
+
+export const freeTextHeight = (value) => FREE_TEXT_SIZE.height
+  + (value.match(/\n/g)?.length ?? 0) * FREE_TEXT_SIZE.font * FREE_TEXT_SIZE.lineHeight
 
 export const makeFreeText = (center, id = uid()) => ({
   id,
   text: 'Text',
-  x: center.x - FREE_TEXT_SIZE.initial * FREE_TEXT_SIZE.width / 2,
-  y: center.y - FREE_TEXT_SIZE.initial * FREE_TEXT_SIZE.height / 2,
-  size: FREE_TEXT_SIZE.initial,
+  x: center.x - FREE_TEXT_SIZE.width / 2,
+  y: center.y - FREE_TEXT_SIZE.height / 2,
+  width: FREE_TEXT_SIZE.width,
+  height: FREE_TEXT_SIZE.height,
 })
 
-// Free text keeps its 10:3.5 frame while the font follows the same scale.
-export function resizeFreeText(text, sx, sy, dx, dy, step = 1) {
-  const size = clampFreeTextSize(text.size
-    + (dx * sx / FREE_TEXT_SIZE.width + dy * sy / FREE_TEXT_SIZE.height) / 2, step)
+// sx/sy = -1, 0 or 1; a zero leaves that axis unchanged.
+export function resizeFreeText(text, sx, sy, dx, dy) {
+  const width = sx ? clampFreeTextDimension(text.width + dx * sx, FREE_TEXT_SIZE.minWidth) : text.width
+  const height = sy ? clampFreeTextDimension(text.height + dy * sy, FREE_TEXT_SIZE.minHeight) : text.height
   return {
     ...text,
-    size,
-    x: text.x + (sx < 0 ? (text.size - size) * FREE_TEXT_SIZE.width : 0),
-    y: text.y + (sy < 0 ? (text.size - size) * FREE_TEXT_SIZE.height : 0),
+    width,
+    height,
+    x: text.x + (sx < 0 ? text.width - width : 0),
+    y: text.y + (sy < 0 ? text.height - height : 0),
   }
 }
 
@@ -163,7 +172,7 @@ export function freeObjectIdsInRect(rect, freeMarks, freeTexts) {
   return {
     markIds: freeMarks.filter((mark) => contains(mark, mark.size, mark.size)).map((mark) => mark.id),
     textIds: freeTexts
-      .filter((text) => contains(text, text.size * FREE_TEXT_SIZE.width, text.size * FREE_TEXT_SIZE.height))
+      .filter((text) => contains(text, text.width, text.height))
       .map((text) => text.id),
   }
 }
@@ -195,7 +204,13 @@ export function normalizeFreeTexts(input) {
     if (!text || !Number.isFinite(item.x) || !Number.isFinite(item.y)) return []
     const id = typeof item.id === 'string' && item.id && !ids.has(item.id) ? item.id : uid()
     ids.add(id)
-    return [{ id, text, x: item.x, y: item.y, size: clampFreeTextSize(Number.isFinite(item.size) ? item.size : FREE_TEXT_SIZE.initial) }]
+    const legacySize = legacyFreeTextSize(item.size)
+    const width = clampFreeTextDimension(Number.isFinite(item.width)
+      ? item.width : legacySize * LEGACY_FREE_TEXT_SIZE.width, FREE_TEXT_SIZE.minWidth)
+    const height = clampFreeTextDimension(Number.isFinite(item.height)
+      ? item.height : legacySize * (LEGACY_FREE_TEXT_SIZE.height
+        + (text.match(/\n/g)?.length ?? 0) * FREE_TEXT_SIZE.lineHeight), FREE_TEXT_SIZE.minHeight)
+    return [{ id, text, x: item.x, y: item.y, width, height }]
   })
 }
 
@@ -552,8 +567,8 @@ export function snapFreeObject(rect, moving, nodes, freeMarks, freeTexts, thresh
     ...freeTexts.filter((text) => !excluded.has(text)).map((text) => ({
       x: text.x,
       y: text.y,
-      width: text.size * FREE_TEXT_SIZE.width,
-      height: text.size * FREE_TEXT_SIZE.height,
+      width: text.width,
+      height: text.height,
     })),
   ]
   return snapNode(rect, candidates, threshold, maxDistance)

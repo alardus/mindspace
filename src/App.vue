@@ -19,6 +19,7 @@ import {
   canLink,
   descendantsOf,
   freeObjectIdsInRect,
+  freeTextHeight,
   highlightParts,
   insertTreeEdgeAfter,
   layoutVerticalGap,
@@ -88,7 +89,7 @@ import {
 } from './clipboard.js'
 import Logo from './Logo.vue'
 import MarkIcon from './MarkIcon.vue'
-import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, keyLabel, selectAllCanvasObjects, shortcutGroups, shortcutKeys, typingTarget } from './shortcuts.js'
+import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, insertLineBreak, keyLabel, selectAllCanvasObjects, shortcutGroups, shortcutKeys, typingTarget } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
 const SHORTCUTS_TIP_KEY = 'mindspace-shortcuts-tip'
@@ -795,6 +796,13 @@ function focusEditor(id, initialText = null) {
 
 function focusNoteEditor(id) {
   nextTick(() => document.querySelector(`[data-note-editor="${CSS.escape(id)}"]`)?.focus())
+}
+
+function insertEditorLine(event) {
+  const editor = event.currentTarget
+  const next = insertLineBreak(editDraft.value.label, editor.selectionStart, editor.selectionEnd, editor.maxLength)
+  editDraft.value.label = next.text
+  nextTick(() => editor.setSelectionRange(next.caret, next.caret))
 }
 
 function onEditorFocusOut(event) {
@@ -1746,6 +1754,7 @@ const markTarget = computed(() => (selectedCount.value > 1 ? `on ${pluralNodes(s
   : primaryNode.value ? `on “${nodeLabel(primaryNode.value)}”`
   : selectedMark.value ? 'replace mark' : 'on canvas'))
 const MARK_CORNERS = [[-1, -1], [1, -1], [-1, 1], [1, 1]]
+const TEXT_HANDLES = [...MARK_CORNERS, [0, -1], [1, 0], [0, 1], [-1, 0]]
 // The frame and its handles are screen-sized: they follow the mark but do not scale with the zoom.
 const markFrame = computed(() => {
   const mark = selectedMark.value
@@ -1948,8 +1957,8 @@ const textFrame = computed(() => {
   return {
     left: `${text.x * zoom + x - 5}px`,
     top: `${text.y * zoom + y - 5}px`,
-    width: `${text.size * FREE_TEXT_SIZE.width * zoom + 10}px`,
-    height: `${text.size * FREE_TEXT_SIZE.height * zoom + 10}px`,
+    width: `${text.width * zoom + 10}px`,
+    height: `${text.height * zoom + 10}px`,
   }
 })
 
@@ -1980,11 +1989,21 @@ function finishFreeTextEditing(save = true) {
   if (!editingTextId.value) return
   const text = freeTexts.value.find((item) => item.id === editingTextId.value)
   const value = textDraft.value.trim()
-  if (save && text && value) text.text = value.slice(0, MAX_LABEL_LENGTH)
+  if (save && text && value) {
+    text.text = value.slice(0, MAX_LABEL_LENGTH)
+    text.height = Math.max(text.height, freeTextHeight(text.text))
+  }
   editingTextId.value = null
   textDraft.value = ''
   record(textEditStart)
   textEditStart = null
+}
+
+function insertFreeTextLine(event) {
+  const editor = event.currentTarget
+  const next = insertLineBreak(textDraft.value, editor.selectionStart, editor.selectionEnd, editor.maxLength)
+  textDraft.value = next.text
+  nextTick(() => editor.setSelectionRange(next.caret, next.caret))
 }
 
 function onCanvasDoubleClick(event) {
@@ -2005,8 +2024,8 @@ function onTextPointerDown(event, text) {
     dx,
     dy,
     moved,
-    origin.size * FREE_TEXT_SIZE.width,
-    origin.size * FREE_TEXT_SIZE.height,
+    origin.width,
+    origin.height,
     group.excluded,
   ), group)
 }
@@ -2017,8 +2036,8 @@ function onTextHandleDown(event, sx, sy) {
 
 function duplicateFreeText() {
   const before = snapshot()
-  const { text, x, y, size } = selectedText.value
-  const copy = { id: documentId(), text, x: x + 16, y: y + 16, size }
+  const { text, x, y, width, height } = selectedText.value
+  const copy = { id: documentId(), text, x: x + 16, y: y + 16, width, height }
   freeTexts.value.push(copy)
   selectFreeText(copy.id)
   record(before)
@@ -3472,9 +3491,9 @@ onBeforeUnmount(() => {
               :style="{
                 left: `${text.x}px`,
                 top: `${text.y}px`,
-                width: `${text.size * FREE_TEXT_SIZE.width}px`,
-                height: `${text.size * FREE_TEXT_SIZE.height}px`,
-                fontSize: `${text.size}px`,
+                width: `${text.width}px`,
+                height: `${text.id === editingTextId ? Math.max(text.height, freeTextHeight(textDraft)) : text.height}px`,
+                fontSize: `${FREE_TEXT_SIZE.font}px`,
               }"
               :aria-label="text.text"
               tabindex="-1"
@@ -3491,6 +3510,7 @@ onBeforeUnmount(() => {
                 @pointerdown.stop
                 @dblclick.stop
                 @keydown.enter.exact.prevent="finishFreeTextEditing()"
+                @keydown.shift.enter.prevent="insertFreeTextLine($event)"
                 @keydown.esc.prevent="finishFreeTextEditing(false)"
                 @blur="finishFreeTextEditing()"
               ></textarea>
@@ -3554,7 +3574,7 @@ onBeforeUnmount(() => {
                     :maxlength="MAX_LABEL_LENGTH"
                     aria-label="Node title"
                     @keydown.enter.exact.prevent="finishEditing()"
-                    @keydown.shift.enter.prevent="focusNoteEditor(id)"
+                    @keydown.shift.enter.prevent="insertEditorLine($event)"
                     @keydown.tab.exact.prevent="focusNoteEditor(id)"
                     @keydown.esc.prevent="finishEditing(false)"
                   ></textarea>
@@ -4032,12 +4052,16 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="textFrame" class="mark-frame text-frame" :style="textFrame">
-          <span class="mark-size">{{ selectedText.size }} px</span>
+          <span class="mark-size">{{ Math.round(selectedText.width) }} × {{ Math.round(selectedText.height) }} px</span>
           <i
-            v-for="[sx, sy] in MARK_CORNERS"
+            v-for="[sx, sy] in TEXT_HANDLES"
             :key="`${sx}${sy}`"
             class="mark-handle"
-            :style="{ left: sx < 0 ? 0 : '100%', top: sy < 0 ? 0 : '100%', cursor: sx === sy ? 'nwse-resize' : 'nesw-resize' }"
+            :style="{
+              left: sx < 0 ? 0 : sx > 0 ? '100%' : '50%',
+              top: sy < 0 ? 0 : sy > 0 ? '100%' : '50%',
+              cursor: sx === 0 ? 'ns-resize' : sy === 0 ? 'ew-resize' : sx === sy ? 'nwse-resize' : 'nesw-resize',
+            }"
             @pointerdown.prevent="onTextHandleDown($event, sx, sy)"
           ></i>
         </div>

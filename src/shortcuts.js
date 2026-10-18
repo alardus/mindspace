@@ -22,6 +22,11 @@ export function keyLabel(key, mac = IS_MAC) {
   return names ? names[mac ? 0 : 1] : key
 }
 
+export function insertLineBreak(text, start, end, maxLength = Infinity) {
+  if (text.length - (end - start) >= maxLength) return { text, caret: start }
+  return { text: `${text.slice(0, start)}\n${text.slice(end)}`, caret: start + 1 }
+}
+
 export const hasMod = (event) => event.metaKey || event.ctrlKey
 // Shift over a block aims a link; Shift + click still adds the block to the selection.
 export const hasLinkMod = (event) => event.shiftKey
@@ -46,7 +51,8 @@ export const SHORTCUTS = [
   { id: 'paste', group: 'Nodes', label: 'Paste on canvas', keys: ['Mod', 'V'] },
   // { id: 'edit', group: 'Nodes', label: 'Edit text', keys: ['double-click'] },
   { id: 'remove', group: 'Nodes', label: 'Delete node', keys: ['Delete'], match: (event) => event.key === 'Delete' || event.key === 'Backspace' },
-  { id: 'noteLine', group: 'Editing', label: 'Description field', keys: ['Tab'], bindings: [['Tab'], ['Shift', 'Enter']] },
+  { id: 'noteLine', group: 'Editing', label: 'Description field', keys: ['Tab'] },
+  { id: 'lineBreak', group: 'Editing', label: 'New line', keys: ['Shift', 'Enter'] },
   { id: 'finishEdit', group: 'Editing', label: 'Finish editing', keys: ['Enter'] },
   { id: 'cancelEdit', group: 'Editing', label: 'Cancel editing', keys: ['Esc'] },
   { id: 'pan', group: 'Canvas', label: 'Pan', keys: [PAN_KEY, 'drag'] },

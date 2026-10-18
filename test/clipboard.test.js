@@ -99,25 +99,25 @@ test('copies, remaps and translates a mixed canvas selection', () => {
   const root = makeNode('Root', { x: 0, y: 0 }, { id: 'root', root: true })
   const serialized = serializeClipboardBranches([root], [], ['root'], [], {
     freeMarks: [{ id: 'mark', mark: 'done', x: 240, y: 20, size: 28 }],
-    freeTexts: [{ id: 'text', text: 'Caption', x: 100, y: 100, size: 10 }],
+    freeTexts: [{ id: 'text', text: 'Caption\nSecond', x: 100, y: 100, width: 100, height: 47 }],
     selectedMarkIds: ['mark'],
     selectedTextIds: ['text'],
   })
   const payload = JSON.parse(serialized.custom)
 
   assert.deepEqual(payload.freeMarks, [{ id: 'mark', mark: 'done', x: 240, y: 20, size: 28 }])
-  assert.deepEqual(payload.freeTexts, [{ id: 'text', text: 'Caption', x: 100, y: 100, size: 10 }])
+  assert.deepEqual(payload.freeTexts, [{ id: 'text', text: 'Caption\nSecond', x: 100, y: 100, width: 100, height: 47 }])
   assert.equal(serialized.count, 3)
-  assert.equal(serialized.text, 'Root\nCaption')
+  assert.equal(serialized.text, 'Root\nCaption\nSecond')
 
   const fragment = parseMindspaceClipboard(serialized.custom, ids())
   assert.deepEqual(fragment.freeMarks, [{ id: 'new-2', mark: 'done', x: 240, y: 20, size: 28 }])
-  assert.deepEqual(fragment.freeTexts, [{ id: 'new-3', text: 'Caption', x: 100, y: 100, size: 10 }])
+  assert.deepEqual(fragment.freeTexts, [{ id: 'new-3', text: 'Caption\nSecond', x: 100, y: 100, width: 100, height: 47 }])
 
   const translated = translateClipboardFragment(fragment, { x: 500, y: 500 })
-  assert.deepEqual(translated.nodes[0].position, { x: 366, y: 432.5 })
-  assert.deepEqual([translated.freeMarks[0].x, translated.freeMarks[0].y], [606, 452.5])
-  assert.deepEqual([translated.freeTexts[0].x, translated.freeTexts[0].y], [466, 532.5])
+  assert.deepEqual(translated.nodes[0].position, { x: 366, y: 426.5 })
+  assert.deepEqual([translated.freeMarks[0].x, translated.freeMarks[0].y], [606, 446.5])
+  assert.deepEqual([translated.freeTexts[0].x, translated.freeTexts[0].y], [466, 526.5])
 })
 
 test('accepts a Mindspace clipboard containing only free canvas objects', () => {

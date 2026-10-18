@@ -636,11 +636,13 @@ test('free objects snap to visible blocks, icons and text, but not themselves', 
   const hidden = { id: 'hidden', hidden: true, position: { x: 95, y: 0 }, dimensions: { width: 20, height: 20 }, data: {} }
   const block = { id: 'block', position: { x: 100, y: 0 }, dimensions: { width: 20, height: 20 }, data: {} }
   const icon = { id: 'icon', x: 200, y: 0, size: 20 }
-  const text = { id: 'text', x: 300, y: 0, size: 2 }
+  const text = { id: 'text', text: 'One', x: 300, y: 0, width: 20, height: 7 }
+  const multiline = { id: 'multiline', text: 'One\nTwo', x: 300, y: 0, width: 100, height: 47 }
 
   assert.equal(mapModel.snapFreeObject({ x: 94, y: 80, width: 20, height: 20 }, moving, [hidden, block], [moving], [], 8, 400).x, 100)
   assert.equal(mapModel.snapFreeObject({ x: 194, y: 80, width: 20, height: 20 }, moving, [], [moving, icon], [], 8, 400).x, 200)
   assert.equal(mapModel.snapFreeObject({ x: 294, y: 80, width: 20, height: 20 }, moving, [], [moving], [text], 8, 400).x, 300)
+  assert.equal(mapModel.snapFreeObject({ x: 500, y: 10, width: 20, height: 20 }, moving, [], [moving], [multiline], 8, 400).y, 13.5)
 })
 
 test('node marks keep the set order, one status at most, and toggle across a selection', () => {
@@ -695,12 +697,25 @@ test('free mark resize keeps the opposite corner, the 16–128 range and the Shi
   assert.equal(resizeFreeMark(mark, 1, 1, 7.4, 7.4, 8).size, 48)
 })
 
-test('free text resize scales its frame and font while keeping the opposite corner still', () => {
-  const resizeFreeText = mapModel.resizeFreeText ?? (() => ({ size: 0 }))
-  const text = { id: 't', text: 'Text', x: 100, y: 200, size: 16 }
+test('free text sides resize width and height independently while the opposite edge stays still', () => {
+  const resizeFreeText = mapModel.resizeFreeText ?? (() => ({}))
+  const text = { id: 't', text: 'One\nTwo', x: 100, y: 200, width: 160, height: 75.2 }
 
-  assert.deepEqual(resizeFreeText(text, 1, 1, 40, 14), { ...text, size: 20 })
-  assert.deepEqual(resizeFreeText(text, -1, -1, -40, -14), { ...text, x: 60, y: 186, size: 20 })
+  assert.deepEqual(resizeFreeText(text, 1, 0, 40, 90), { ...text, width: 200 })
+  assert.deepEqual(resizeFreeText(text, -1, 0, -40, 90), { ...text, x: 60, width: 200 })
+  assert.deepEqual(resizeFreeText(text, 0, 1, 90, 20), { ...text, height: 95.2 })
+  assert.deepEqual(resizeFreeText(text, 0, -1, 90, -20), { ...text, y: 180, height: 95.2 })
+  assert.deepEqual(resizeFreeText(text, -1, -1, -40, -20), {
+    ...text, x: 60, y: 180, width: 200, height: 95.2,
+  })
+})
+
+test('free text height grows by one text line for every explicit line break', () => {
+  const freeTextHeight = mapModel.freeTextHeight ?? (() => 0)
+
+  assert.equal(freeTextHeight('One'), 56)
+  assert.equal(freeTextHeight('One\nTwo'), 75.2)
+  assert.equal(freeTextHeight('One\nTwo\nThree'), 94.4)
 })
 
 test('a free text block starts with default text centered at the requested point', () => {
@@ -711,7 +726,8 @@ test('a free text block starts with default text centered at the requested point
     text: 'Text',
     x: 100,
     y: 100,
-    size: 16,
+    width: 160,
+    height: 56,
   })
 })
 
@@ -723,8 +739,9 @@ test('box selection fully contains free icons and text like Vue Flow nodes', () 
       { id: 'partial-mark', x: 100, y: 20, size: 28 },
     ],
     [
-      { id: 'inside-text', x: 20, y: 20, size: 8 },
-      { id: 'partial-text', x: 40, y: 60, size: 16 },
+      { id: 'inside-text', text: 'Text', x: 20, y: 20, width: 80, height: 28 },
+      { id: 'partial-text', text: 'Text', x: 40, y: 60, width: 160, height: 56 },
+      { id: 'tall-text', text: 'One\nTwo\nThree', x: 20, y: 50, width: 80, height: 47.2 },
     ],
   )
 
@@ -734,7 +751,7 @@ test('box selection fully contains free icons and text like Vue Flow nodes', () 
 test('a mixed canvas selection moves every kind of block by the same delta', () => {
   const node = makeNode('Node', { x: 10, y: 20 })
   const mark = { id: 'mark', mark: 'done', x: 30, y: 40, size: 28 }
-  const text = { id: 'text', text: 'Text', x: 50, y: 60, size: 16 }
+  const text = { id: 'text', text: 'Text', x: 50, y: 60, width: 160, height: 56 }
 
   mapModel.translateCanvasObjects?.([node], [mark, text], 15, -5)
 
@@ -743,24 +760,28 @@ test('a mixed canvas selection moves every kind of block by the same delta', () 
   assert.deepEqual([text.x, text.y], [65, 55])
 })
 
-test('free text blocks survive a save and load while invalid entries are skipped', () => {
+test('free text blocks keep independent dimensions and migrate legacy scale without changing the frame', () => {
   const map = normalizeMap({
     version: 2,
     nodes: [{ id: 'root', data: { label: 'Root' } }],
     edges: [],
     freeTexts: [
-      { id: 't1', text: ' Caption ', x: 10, y: 20, size: 500 },
+      { id: 't1', text: ' Caption ', x: 10, y: 20, width: 220, height: 90 },
       { id: 't1', text: 'Text', x: 0, y: 0 },
       { id: 'empty', text: '   ', x: 0, y: 0, size: 16 },
       { id: 'bad-position', text: 'Text', x: 'left', y: 0, size: 16 },
+      { id: 'legacy', text: 'One\nTwo', x: 30, y: 40, size: 10 },
     ],
   })
   const texts = map.freeTexts ?? []
 
-  assert.deepEqual(texts[0], { id: 't1', text: 'Caption', x: 10, y: 20, size: 48 })
-  assert.equal(texts.length, 2)
+  assert.deepEqual(texts[0], { id: 't1', text: 'Caption', x: 10, y: 20, width: 220, height: 90 })
+  assert.equal(texts.length, 3)
   assert.notEqual(texts[1].id, 't1')
-  assert.equal(texts[1].size, 16)
+  assert.deepEqual({ ...texts[1], id: 'generated' }, {
+    id: 'generated', text: 'Text', x: 0, y: 0, width: 160, height: 56,
+  })
+  assert.deepEqual(texts[2], { id: 'legacy', text: 'One\nTwo', x: 30, y: 40, width: 100, height: 47 })
   assert.equal('freeTexts' in normalizeMap({ version: 2, nodes: [{ data: { label: 'A' } }], edges: [] }), false)
   assert.deepEqual(normalizeMap(JSON.parse(JSON.stringify(map))).freeTexts, map.freeTexts)
 })

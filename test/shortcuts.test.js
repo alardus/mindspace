@@ -56,7 +56,9 @@ test('help groups cover every registry entry in group order', () => {
   assert.equal(groups.flatMap((group) => group.items).length, SHORTCUTS.length)
   assert.ok(groups.every((group) => group.items.length))
   assert.deepEqual(groups.find((group) => group.title === 'Editing').items
-    .find((item) => item.id === 'noteLine').bindings, [['Tab'], ['Shift', 'Enter']])
+    .find((item) => item.id === 'noteLine').bindings, [['Tab']])
+  assert.deepEqual(groups.find((group) => group.title === 'Editing').items
+    .find((item) => item.id === 'lineBreak').bindings, [['Shift', 'Enter']])
   assert.deepEqual(groups.find((group) => group.title === 'General').items
     .find((item) => item.id === 'redo').bindings, [['Shift', 'Ctrl', 'Z'], ['Ctrl', 'Y']])
   assert.deepEqual(shortcutKeys('theme', true), ['⇧', '⌘', 'L'])
@@ -69,6 +71,20 @@ test('help groups cover every registry entry in group order', () => {
     .find((item) => item.id === 'zoom').bindings, [['⌘', 'wheel']])
   assert.deepEqual(groups.find((group) => group.title === 'Maps').items
     .map((item) => item.id), ['mapNavigate', 'mapOpen', 'mapRename', 'mapDuplicate', 'mapDelete', 'mapMenu'])
+})
+
+test('line break replaces the selection and puts the caret after the new line', () => {
+  const insertLineBreak = shortcuts.insertLineBreak ?? (() => null)
+
+  assert.deepEqual(insertLineBreak('First second', 5, 12, 100), { text: 'First\n', caret: 6 })
+  assert.deepEqual(insertLineBreak('First', 5, 5, 100), { text: 'First\n', caret: 6 })
+})
+
+test('line break respects the editor length limit', () => {
+  const insertLineBreak = shortcuts.insertLineBreak ?? (() => null)
+
+  assert.deepEqual(insertLineBreak('First', 5, 5, 5), { text: 'First', caret: 5 })
+  assert.deepEqual(insertLineBreak('First', 0, 1, 5), { text: '\nirst', caret: 1 })
 })
 
 test('branch copy and canvas paste are reference-only shortcuts', () => {
