@@ -586,6 +586,36 @@ export function shiftNodesBelow(nodes, y, amount, excluded = new Set()) {
   }
 }
 
+export function anchorNodeResize(node, previousWidth, width) {
+  if (node.data.side !== 'left' || !Number.isFinite(previousWidth) || !Number.isFinite(width)) return
+  node.position = { ...node.position, x: node.position.x + previousWidth - width }
+}
+
+export function beginNodeEdit(node) {
+  if (!node) return null
+  const width = node.dimensions?.width || (node.data.root ? DEFAULT_SIZE.rootWidth : DEFAULT_SIZE.width)
+  return { id: node.id, x: node.position.x, width }
+}
+
+export function restoreNodeEdit(node, anchor) {
+  if (!node || anchor?.id !== node.id) return null
+  node.position = { ...node.position, x: anchor.x }
+  return anchor.width
+}
+
+export function persistedNodePosition(node, anchor, autoLayout) {
+  return {
+    x: !autoLayout && anchor?.id === node.id ? anchor.x : node.position.x,
+    y: node.position.y,
+  }
+}
+
+export function nextSiblingX(sibling, width = DEFAULT_SIZE.width) {
+  return sibling.data.side === 'left'
+    ? sibling.position.x + width - DEFAULT_SIZE.width
+    : sibling.position.x
+}
+
 export function layoutNodes(nodes, edges, sizeOf = () => null, settings = DEFAULT_SETTINGS) {
   const { layout, density } = normalizeSettings(settings)
   const horizontalGap = 100

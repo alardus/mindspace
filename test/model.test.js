@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as mapModel from '../src/model.js'
-import { COLORS, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
+import { COLORS, DEFAULT_SIZE, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
 
 const parseMarkdown = mapModel.parseMarkdown ?? (() => ({ title: '', nodes: [], edges: [] }))
 const toMarkdown = mapModel.toMarkdown ?? (() => '')
@@ -9,6 +9,11 @@ const blockPreview = mapModel.blockPreview ?? ((text) => text)
 const pointRectDistance = mapModel.pointRectDistance ?? (() => Infinity)
 const branchCurveBend = mapModel.branchCurveBend ?? (() => 60)
 const allowsAttachTarget = mapModel.allowsAttachTarget ?? (() => true)
+const anchorNodeResize = mapModel.anchorNodeResize ?? (() => {})
+const beginNodeEdit = mapModel.beginNodeEdit ?? ((node) => ({ id: node.id, x: node.position.x, width: null }))
+const restoreNodeEdit = mapModel.restoreNodeEdit ?? (() => null)
+const persistedNodePosition = mapModel.persistedNodePosition ?? ((node) => node.position)
+const nextSiblingX = mapModel.nextSiblingX ?? ((sibling) => sibling.position.x)
 
 const image = {
   assetId: 'asset-1',
@@ -51,6 +56,52 @@ test('branch curves cannot bend back across a short or reversed gap', () => {
   assert.equal(branchCurveBend(0, 80, 1), 40)
   assert.equal(branchCurveBend(100, 20, -1), -40)
   assert.equal(branchCurveBend(100, 120, -1), 0)
+})
+
+test('a resized branch grows away from its incoming connector', () => {
+  const left = makeNode('Left', { x: 100, y: 20 }, { side: 'left' })
+  const right = makeNode('Right', { x: 300, y: 20 }, { side: 'right' })
+
+  anchorNodeResize(left, 80, 240)
+  anchorNodeResize(right, 80, 240)
+
+  assert.equal(left.position.x, -60)
+  assert.equal(left.position.x + 240, 180)
+  assert.equal(right.position.x, 300)
+
+  anchorNodeResize(left, 240, 80)
+  assert.equal(left.position.x, 100)
+  assert.equal(left.position.x + 80, 180)
+
+  const unmeasured = makeNode('New', { x: 50, y: 20 }, { side: 'left' })
+  anchorNodeResize(unmeasured, undefined, 240)
+  assert.equal(unmeasured.position.x, 50)
+})
+
+test('node editing keeps temporary geometry out of persistence and restores the resize anchor', () => {
+  const node = makeNode('New', { x: 50, y: 20 }, { side: 'left' })
+  const anchor = beginNodeEdit(node)
+
+  assert.equal(anchor.width, DEFAULT_SIZE.width)
+  anchorNodeResize(node, anchor.width, 240)
+  assert.equal(node.position.x + 240, 50 + DEFAULT_SIZE.width)
+  assert.deepEqual(persistedNodePosition(node, anchor, false), { x: 50, y: 20 })
+
+  const baseline = restoreNodeEdit(node, anchor)
+  anchorNodeResize(node, baseline, 80)
+  assert.equal(node.position.x + 80, 50 + DEFAULT_SIZE.width)
+  assert.deepEqual(persistedNodePosition(node, null, false), node.position)
+
+  node.position.x = 25
+  assert.deepEqual(persistedNodePosition(node, anchor, true), { x: 25, y: 20 })
+})
+
+test('a new manual sibling shares the incoming connector of a left branch', () => {
+  const left = makeNode('Left', { x: 100, y: 20 }, { side: 'left' })
+  const right = makeNode('Right', { x: 300, y: 20 }, { side: 'right' })
+
+  assert.equal(nextSiblingX(left, 80), 0)
+  assert.equal(nextSiblingX(right, 80), 300)
 })
 
 test('an attached branch changes parent only when dropped on the new parent', () => {

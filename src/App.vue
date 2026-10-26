@@ -12,7 +12,9 @@ import {
   MAX_LINK_LABEL,
   PALETTES,
   STORAGE_KEY,
+  anchorNodeResize,
   allowsAttachTarget,
+  beginNodeEdit,
   blockPreview,
   branchColor,
   branchCurveBend,
@@ -35,6 +37,7 @@ import {
   markName,
   mergeImageNode,
   nearestLinkSide,
+  nextSiblingX,
   nextMatch,
   nodeInDirection,
   normalizeLibrary,
@@ -48,11 +51,13 @@ import {
   parseMarkdown,
   parseOpml,
   pointRectDistance,
+  persistedNodePosition,
   plural,
   pluralNodes,
   recolorForPalette,
   referencedAssetIds,
   reparentBranches,
+  restoreNodeEdit,
   relativeTime,
   resizeFreeMark,
   resizeFreeText,
@@ -246,7 +251,7 @@ let helpReturnFocus = null
 let imageReturnFocus = null
 let imageLoadGeneration = 0
 let copiedTimer
-const { dimensions, getNodes, screenToFlowCoordinate, setCenter, setViewport, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
+const { dimensions, getNodes, screenToFlowCoordinate, setCenter, setViewport, updateNodeDimensions, viewport, zoomIn, zoomOut, zoomTo } = useVueFlow()
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 // The panel floats over the canvas: its margin and width don't count as visible area.
 const INSPECTOR_SPACE = 12 + 320 + 12
@@ -285,6 +290,7 @@ function onCanvasWheel(event) {
 }
 let dragStart = null
 let editStart = null
+let editAnchor = null
 let saveTimer
 let toastTimer
 let initialFitDone = false
@@ -301,6 +307,7 @@ let pendingLayout = pendingLayoutInitial
 let pendingFocus = false
 let focusTimer
 const measuredNodeHeights = new Map()
+const measuredNodeWidths = new Map()
 let pendingRevealId = null
 
 const selectedNodes = computed(() => nodes.value.filter((node) => node.selected && !node.hidden))
@@ -437,7 +444,7 @@ function cleanMap() {
     nodes: nodes.value.map((node) => ({
       id: node.id,
       type: 'mind',
-      position: { x: node.position.x, y: node.position.y },
+      position: persistedNodePosition(node, editAnchor, autoLayout.value),
       data: {
         label: node.data.label,
         note: node.data.note || '',
@@ -486,6 +493,7 @@ function openMap(map) {
   const normalized = normalizeMap(map)
   pendingLayout = normalized.needsLayout
   measuredNodeHeights.clear()
+  measuredNodeWidths.clear()
   title.value = normalized.title
   autoLayout.value = normalized.autoLayout
   settings.value = normalized.settings
@@ -495,6 +503,7 @@ function openMap(map) {
   freeTexts.value = normalized.freeTexts ?? []
   links.value = normalized.links ?? []
   editingId.value = null
+  editAnchor = null
   editingTextId.value = null
   selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
   textDraft.value = ''
@@ -781,6 +790,10 @@ function focusEditor(id, initialText = null) {
   for (const ancestor of ancestorsOf(id)) {
     if (searchExpanded.delete(ancestor)) nodesById.value.get(ancestor).data.collapsed = false
   }
+  const height = node?.dimensions?.height
+  editAnchor = beginNodeEdit(node)
+  if (editAnchor) measuredNodeWidths.set(id, editAnchor.width)
+  if (Number.isFinite(height)) measuredNodeHeights.set(id, height)
   editingId.value = id
   editDraft.value = { label: initialText ?? node?.data.label ?? '', note: node?.data.note ?? '' }
   editStart = snapshot()
@@ -812,15 +825,28 @@ function onEditorFocusOut(event) {
 
 function finishEditing(save = true) {
   if (!editingId.value) return
-  const node = nodes.value.find((item) => item.id === editingId.value)
+  const id = editingId.value
+  const documentId = activeId.value
+  const node = nodes.value.find((item) => item.id === id)
   const label = editDraft.value.label.trim()
   if (save && node && label) {
     node.data.label = label.slice(0, MAX_LABEL_LENGTH)
     node.data.note = editDraft.value.note.trim().slice(0, 200)
   }
+  if (node && editAnchor?.id === node.id) {
+    const width = restoreNodeEdit(node, editAnchor)
+    if (Number.isFinite(width)) measuredNodeWidths.set(node.id, width)
+    else measuredNodeWidths.delete(node.id)
+  }
   editingId.value = null
+  editAnchor = null
   record(editStart)
   editStart = null
+  nextTick(() => {
+    if (activeId.value !== documentId || !nodesById.value.has(id)) return
+    const nodeElement = document.querySelector(`.vue-flow__node[data-id="${CSS.escape(id)}"]`)
+    if (nodeElement) updateNodeDimensions([{ id, nodeElement, forceUpdate: true }])
+  })
 }
 
 function orient() {
@@ -891,7 +917,8 @@ function manualSiblingPosition(sibling) {
   const bottom = Math.max(...branchNodes.map((node) => node.position.y + (node.dimensions?.height || DEFAULT_SIZE.height)))
   const gap = layoutVerticalGap(settings.value)
   shiftNodesBelow(nodes.value, bottom, DEFAULT_SIZE.height + gap, branch)
-  return { x: sibling.position.x, y: bottom + gap }
+  const width = measuredNodeWidths.get(sibling.id) ?? sibling.dimensions?.width ?? DEFAULT_SIZE.width
+  return { x: nextSiblingX(sibling, width), y: bottom + gap }
 }
 
 function addChild(parentId = primaryNode.value?.id, afterSiblingId = null) {
@@ -3274,8 +3301,16 @@ function onNodesChange(changes) {
   const searchId = dimensionChanges.some((change) => change.id === searchCurrentId.value) ? searchCurrentId.value : null
   for (const change of dimensionChanges) {
     const node = nodes.value.find((item) => item.id === change.id)
+    const width = change.dimensions?.width ?? node?.dimensions?.width
     const height = change.dimensions?.height ?? node?.dimensions?.height
-    if (!node || !Number.isFinite(height)) continue
+    if (!node) continue
+    const previousWidth = measuredNodeWidths.get(node.id)
+    if (Number.isFinite(width)) {
+      measuredNodeWidths.set(node.id, width)
+      if (!autoLayout.value && previousWidth) anchorNodeResize(node, previousWidth, width)
+    }
+    if (editingId.value === node.id) continue
+    if (!Number.isFinite(height)) continue
     const previousHeight = measuredNodeHeights.get(node.id)
     measuredNodeHeights.set(node.id, height)
     if (!autoLayout.value && previousHeight && height > previousHeight + 0.5) {
