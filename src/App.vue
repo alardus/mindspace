@@ -3264,9 +3264,8 @@ function onKeydown(event) {
   if (shortcut?.id === 'duplicateMark' && !selectedMark.value && !selectedText.value) return
   if (shortcut) {
     if (shortcut.id !== 'deselect') event.preventDefault()
-    // Vue Flow uses arrow keys to move selected nodes. Navigation owns these
-    // keys, so do not let the event reach the canvas' node handler.
-    if (shortcut.id === 'navigate') event.stopPropagation()
+    // Vue Flow also handles arrows and Enter; our navigation and insertion must win once handled.
+    if (shortcut.id === 'navigate' || shortcut.id === 'addSibling') event.stopPropagation()
     runShortcut(shortcut.id, event)
   } else if (event.key.length === 1 && !event.altKey && !event.metaKey && !event.ctrlKey && event.key !== ' ') {
     const editTarget = typingTarget(selectedNodes.value, selectedMarkIds.value, selectedTextIds.value)
