@@ -1040,6 +1040,36 @@ test('a link chooses a different dogleg instead of covering an occupied segment'
   assert.deepEqual(second.points, points.map(({ x, y }) => [x, y]))
 })
 
+test('links spread on one block side also use separate departure turns', () => {
+  const source = { x: 600, y: 300, width: 100, height: 30 }
+  const upper = { x: 600, y: 200, width: 100, height: 30 }
+  const left = { x: 200, y: 200, width: 100, height: 30 }
+  const obstacles = [source, upper, left]
+  const first = mapModel.linkPath(
+    mapModel.linkAnchor(source, 'top', 6, -5),
+    mapModel.linkAnchor(upper, 'bottom'),
+    'end',
+    obstacles,
+  )
+  const second = mapModel.linkPath(
+    mapModel.linkAnchor(source, 'top', 6, 5),
+    mapModel.linkAnchor(left, 'right'),
+    'end',
+    obstacles,
+    [first.points],
+  )
+
+  assert.equal(routeOverlap(pathPoints(first.d), pathPoints(second.d)), 0)
+})
+
+test('a link preview can take an unused anchor slot without moving drawn links', () => {
+  const one = mapModel.nextLinkAnchorOffset?.([0], 30)
+  const two = mapModel.nextLinkAnchorOffset?.([-5, 5], 30)
+
+  assert.ok(![0].includes(one) && Math.abs(one) <= 15)
+  assert.ok(![-5, 5].includes(two) && Math.abs(two) <= 15)
+})
+
 test('a point crossing does not push a link into a detour', () => {
   const crossing = [[[50, -100], [50, 100]]]
   const path = mapModel.linkPath(

@@ -303,6 +303,9 @@ export function linkAnchorOffsets(count, span) {
   return Array.from({ length: count }, (_, index) => (index - (count - 1) / 2) * step)
 }
 
+export const nextLinkAnchorOffset = (used, span) => linkAnchorOffsets(used.length + 1, span)
+  .find((offset) => !used.includes(offset)) ?? 0
+
 export function nearestLinkSide(rect, point) {
   const frame = linkFrame(rect)
   const gaps = {
@@ -380,10 +383,16 @@ export function linkPath(from, to, arrows = 'end', obstacles = [], occupied = []
     while (index.get(at)?.some((line) => intervalOverlap(a, b, line))) at += step * 8
     return at
   }
-  left = freeLane(left, -1, vertical, first[1], last[1])
-  right = freeLane(right, 1, vertical, first[1], last[1])
-  top = freeLane(top, -1, horizontal, first[0], last[0])
-  bottom = freeLane(bottom, 1, horizontal, first[0], last[0])
+  const moveTurn = (anchor, turn) => {
+    if (anchor.nx) turn[0] = freeLane(turn[0], anchor.nx, vertical, top, bottom)
+    else turn[1] = freeLane(turn[1], anchor.ny, horizontal, left, right)
+  }
+  moveTurn(from, first)
+  moveTurn(to, last)
+  left = freeLane(Math.min(left, first[0] - stub, last[0] - stub), -1, vertical, first[1], last[1])
+  right = freeLane(Math.max(right, first[0] + stub, last[0] + stub), 1, vertical, first[1], last[1])
+  top = freeLane(Math.min(top, first[1] - stub, last[1] - stub), -1, horizontal, first[0], last[0])
+  bottom = freeLane(Math.max(bottom, first[1] + stub, last[1] + stub), 1, horizontal, first[0], last[0])
   const simplify = (points) => {
     const result = []
     for (const current of points) {

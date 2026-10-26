@@ -38,6 +38,7 @@ import {
   markName,
   mergeImageNode,
   nearestLinkSide,
+  nextLinkAnchorOffset,
   nextSiblingX,
   nextMatch,
   nodeInDirection,
@@ -2136,7 +2137,7 @@ const drawnLinks = computed(() => {
     const anchors = item.ends.map((end, index) => linkAnchor(end, item.sides[index], LINK_FRAME, item.offsets[index]))
     const path = linkPath(...anchors, item.link.arrows, linkObstacles.value, occupied)
     occupied.push(path.points)
-    return { link: item.link, ghost: item.ghost, ...path }
+    return { link: item.link, ghost: item.ghost, nodeIds: item.nodeIds, sides: item.sides, offsets: item.offsets, ...path }
   })
 })
 const selectedDrawn = computed(() => drawnLinks.value.find((item) => item.link.id === selectedLinkId.value))
@@ -2154,10 +2155,16 @@ const linkPreview = computed(() => {
   const target = nodesById.value.get(drag.targetId)
   const moving = target ? linkEnd(target) : { ...drag.point, width: 0, height: 0 }
   const ends = drag.end === 'to' ? [linkEnd(fixed), moving] : [moving, linkEnd(fixed)]
+  const nodeIds = drag.end === 'to' ? [fixed.id, target?.id] : [target?.id, fixed.id]
   const sides = linkSides(...ends)
-  const anchors = ends.map((end, index) => linkAnchor(end, sides[index], end === moving && !target ? 0 : LINK_FRAME))
+  const drawn = drawnLinks.value
+  const anchors = ends.map((end, index) => {
+    const used = drawn.flatMap((item) => item.nodeIds.flatMap((id, itemIndex) => id === nodeIds[index] && item.sides[itemIndex] === sides[index] ? [item.offsets[itemIndex]] : []))
+    const span = sides[index] === 'top' || sides[index] === 'bottom' ? end.width : end.height
+    return linkAnchor(end, sides[index], end === moving && !target ? 0 : LINK_FRAME, nodeIds[index] ? nextLinkAnchorOffset(used, span) : 0)
+  })
   const [origin, snap] = drag.end === 'to' ? anchors : [anchors[1], anchors[0]]
-  const occupied = drawnLinks.value.map((item) => item.points)
+  const occupied = drawn.map((item) => item.points)
   return { d: linkPath(...anchors, 'none', linkObstacles.value, occupied).d, frame: target && linkFrame(nodeBox(target)), origin, snap: target && snap }
 })
 
