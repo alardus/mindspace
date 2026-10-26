@@ -27,6 +27,7 @@ import {
   layoutVerticalGap,
   layoutNodes,
   linkAnchor,
+  linkAnchorOffsets,
   linkFrame,
   linkParts,
   linkPath,
@@ -2107,18 +2108,37 @@ function visibleEnd(id) {
   return node
 }
 
-const drawnLinks = computed(() => links.value.flatMap((link) => {
-  const from = visibleEnd(link.from)
-  const to = visibleEnd(link.to)
-  if (!from || !to || from.id === to.id || linkDrag.value?.linkId === link.id) return []
-  const ends = [linkEnd(from), linkEnd(to)]
-  const sides = linkSides(...ends)
-  return [{
-    link,
-    ghost: from.id !== link.from || to.id !== link.to,
-    ...linkPath(linkAnchor(ends[0], sides[0]), linkAnchor(ends[1], sides[1]), link.arrows, linkObstacles.value),
-  }]
-}))
+const drawnLinks = computed(() => {
+  const pending = links.value.flatMap((link) => {
+    const from = visibleEnd(link.from)
+    const to = visibleEnd(link.to)
+    if (!from || !to || from.id === to.id || linkDrag.value?.linkId === link.id) return []
+    const ends = [linkEnd(from), linkEnd(to)]
+    return [{ link, ends, sides: linkSides(...ends), nodeIds: [from.id, to.id], offsets: [0, 0], ghost: from.id !== link.from || to.id !== link.to }]
+  })
+  const groups = new Map()
+  for (const item of pending) {
+    item.ends.forEach((end, index) => {
+      const key = `${item.nodeIds[index]}:${item.sides[index]}`
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push({ item, end, index })
+    })
+  }
+  for (const group of groups.values()) {
+    const side = group[0].item.sides[group[0].index]
+    const span = side === 'top' || side === 'bottom' ? group[0].end.width : group[0].end.height
+    linkAnchorOffsets(group.length, span).forEach((offset, index) => {
+      group[index].item.offsets[group[index].index] = offset
+    })
+  }
+  const occupied = []
+  return pending.map((item) => {
+    const anchors = item.ends.map((end, index) => linkAnchor(end, item.sides[index], LINK_FRAME, item.offsets[index]))
+    const path = linkPath(...anchors, item.link.arrows, linkObstacles.value, occupied)
+    occupied.push(path.points)
+    return { link: item.link, ghost: item.ghost, ...path }
+  })
+})
 const selectedDrawn = computed(() => drawnLinks.value.find((item) => item.link.id === selectedLinkId.value))
 
 const linkAim = computed(() => {
@@ -2137,7 +2157,8 @@ const linkPreview = computed(() => {
   const sides = linkSides(...ends)
   const anchors = ends.map((end, index) => linkAnchor(end, sides[index], end === moving && !target ? 0 : LINK_FRAME))
   const [origin, snap] = drag.end === 'to' ? anchors : [anchors[1], anchors[0]]
-  return { d: linkPath(...anchors, 'none', linkObstacles.value).d, frame: target && linkFrame(nodeBox(target)), origin, snap: target && snap }
+  const occupied = drawnLinks.value.map((item) => item.points)
+  return { d: linkPath(...anchors, 'none', linkObstacles.value, occupied).d, frame: target && linkFrame(nodeBox(target)), origin, snap: target && snap }
 })
 
 // The visible block whose link frame, grown by `reach`, is under the point; the nearest one where frames overlap.

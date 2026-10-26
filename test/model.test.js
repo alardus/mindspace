@@ -937,6 +937,23 @@ const assertOrthogonal = (d) => {
   return points
 }
 
+const routeOverlap = (first, second) => {
+  let overlap = 0
+  for (let a = 1; a < first.length; a += 1) {
+    for (let b = 1; b < second.length; b += 1) {
+      const [a1, a2, b1, b2] = [first[a - 1], first[a], second[b - 1], second[b]]
+      if (a1.x === a2.x && b1.x === b2.x && a1.x === b1.x) {
+        overlap += Math.max(0, Math.min(Math.max(a1.y, a2.y), Math.max(b1.y, b2.y))
+          - Math.max(Math.min(a1.y, a2.y), Math.min(b1.y, b2.y)))
+      } else if (a1.y === a2.y && b1.y === b2.y && a1.y === b1.y) {
+        overlap += Math.max(0, Math.min(Math.max(a1.x, a2.x), Math.max(b1.x, b2.x))
+          - Math.max(Math.min(a1.x, a2.x), Math.min(b1.x, b2.x)))
+      }
+    }
+  }
+  return overlap
+}
+
 test('a link is an orthogonal polyline square to its sides, with the arrowhead off the frame', () => {
   const { linkAnchor, linkFrame, linkPath, nearestLinkSide } = mapModel
   const source = { x: 34, y: 144, width: 230, height: 48 }
@@ -949,6 +966,11 @@ test('a link is an orthogonal polyline square to its sides, with the arrowhead o
   assert.equal(nearestLinkSide(source, { x: 150, y: 150 }), 'top')
   assert.equal(nearestLinkSide(source, { x: 150, y: 200 }), 'bottom')
   assert.equal(nearestLinkSide(source, { x: 30, y: 168 }), 'left')
+  assert.deepEqual(linkAnchor(source, 'right', 6, -8), { x: 270, y: 160, nx: 1, ny: 0 })
+  assert.deepEqual(linkAnchor(source, 'top', 6, 8), { x: 157, y: 138, nx: 0, ny: -1 })
+  assert.deepEqual(mapModel.linkAnchorOffsets?.(1, 30), [0])
+  assert.deepEqual(mapModel.linkAnchorOffsets?.(2, 30), [-5, 5])
+  assert.deepEqual(mapModel.linkAnchorOffsets?.(5, 30), [-15, -7.5, 0, 7.5, 15])
 
   const obstacles = [source, target]
   const path = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'end', obstacles)
@@ -996,6 +1018,39 @@ test('orthogonal routing stays finite when every candidate crosses an obstacle',
   assertOrthogonal(path.d)
   assert.ok(Number.isFinite(path.middle.x))
   assert.ok(Number.isFinite(path.middle.y))
+})
+
+test('a link chooses a different dogleg instead of covering an occupied segment', () => {
+  const first = mapModel.linkPath(
+    { x: 0, y: 0, nx: 1, ny: 0 },
+    { x: 100, y: 100, nx: -1, ny: 0 },
+    'none',
+  )
+  const occupied = [pathPoints(first.d).map(({ x, y }) => [x, y])]
+  const second = mapModel.linkPath(
+    { x: 0, y: 20, nx: 1, ny: 0 },
+    { x: 100, y: 120, nx: -1, ny: 0 },
+    'none',
+    [],
+    occupied,
+  )
+  const points = assertOrthogonal(second.d)
+
+  assert.equal(routeOverlap(pathPoints(first.d), points), 0)
+  assert.deepEqual(second.points, points.map(({ x, y }) => [x, y]))
+})
+
+test('a point crossing does not push a link into a detour', () => {
+  const crossing = [[[50, -100], [50, 100]]]
+  const path = mapModel.linkPath(
+    { x: 0, y: 0, nx: 1, ny: 0 },
+    { x: 100, y: 0, nx: -1, ny: 0 },
+    'none',
+    [],
+    crossing,
+  )
+
+  assert.equal(path.d, 'M0,0 L100,0')
 })
 
 test('library keeps valid Drive backup metadata and drops broken ones', () => {

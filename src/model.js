@@ -285,10 +285,22 @@ export const linkFrame = (rect, grow = LINK_FRAME) => ({
   height: rect.height + 2 * grow,
 })
 
-export function linkAnchor(rect, side, grow = LINK_FRAME) {
+export function linkAnchor(rect, side, grow = LINK_FRAME, offset = 0) {
   const frame = linkFrame(rect, grow)
   const [nx, ny] = SIDE_NORMALS[side]
-  return { x: frame.x + frame.width * (1 + nx) / 2, y: frame.y + frame.height * (1 + ny) / 2, nx, ny }
+  return {
+    x: frame.x + frame.width * (1 + nx) / 2 - ny * offset,
+    y: frame.y + frame.height * (1 + ny) / 2 + nx * offset,
+    nx,
+    ny,
+  }
+}
+
+export function linkAnchorOffsets(count, span) {
+  if (count < 1) return []
+  if (count === 1) return [0]
+  const step = Math.min(10, span / (count - 1))
+  return Array.from({ length: count }, (_, index) => (index - (count - 1) / 2) * step)
 }
 
 export function nearestLinkSide(rect, point) {
@@ -323,7 +335,7 @@ export function linkSides(source, target) {
 
 // The line leaves and arrives square to its sides. An arrowhead is a 7×8 chevron with its tip 2px off the frame;
 // the line stops 6px short of the tip. `ends` are where the handles of a selected link sit.
-export function linkPath(from, to, arrows = 'end', obstacles = []) {
+export function linkPath(from, to, arrows = 'end', obstacles = [], occupied = []) {
   const off = (anchor, distance) => [anchor.x + anchor.nx * distance, anchor.y + anchor.ny * distance]
   const head = (anchor) => {
     const [x, y] = off(anchor, 9)
@@ -348,6 +360,30 @@ export function linkPath(from, to, arrows = 'end', obstacles = []) {
   right += stub
   top -= stub
   bottom += stub
+  const vertical = new Map()
+  const horizontal = new Map()
+  const addInterval = (index, at, a, b) => {
+    if (!index.has(at)) index.set(at, [])
+    index.get(at).push([Math.min(a, b), Math.max(a, b)])
+  }
+  for (const points of occupied) {
+    for (let index = 1; index < points.length; index += 1) {
+      const [a, b] = [points[index - 1], points[index]]
+      if (a[0] === b[0]) addInterval(vertical, a[0], a[1], b[1])
+      else if (a[1] === b[1]) addInterval(horizontal, a[1], a[0], b[0])
+    }
+  }
+  const intervalOverlap = (a, b, interval) => Math.max(0, Math.min(Math.max(a, b), interval[1]) - Math.max(Math.min(a, b), interval[0]))
+  const overlap = (a, b) => (a[0] === b[0] ? vertical.get(a[0])?.reduce((sum, line) => sum + intervalOverlap(a[1], b[1], line), 0)
+    : horizontal.get(a[1])?.reduce((sum, line) => sum + intervalOverlap(a[0], b[0], line), 0)) ?? 0
+  const freeLane = (at, step, index, a, b) => {
+    while (index.get(at)?.some((line) => intervalOverlap(a, b, line))) at += step * 8
+    return at
+  }
+  left = freeLane(left, -1, vertical, first[1], last[1])
+  right = freeLane(right, 1, vertical, first[1], last[1])
+  top = freeLane(top, -1, horizontal, first[0], last[0])
+  bottom = freeLane(bottom, 1, horizontal, first[0], last[0])
   const simplify = (points) => {
     const result = []
     for (const current of points) {
@@ -376,17 +412,21 @@ export function linkPath(from, to, arrows = 'end', obstacles = []) {
       && Math.max(a[0], b[0]) > frame.x && Math.min(a[0], b[0]) < frame.x + frame.width
   const score = (route) => {
     let crossings = 0
+    let overlaps = 0
     let length = 0
     for (let index = 1; index < route.length; index += 1) {
       const [a, b] = [route[index - 1], route[index]]
       length += Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1])
       crossings += frames.filter((frame) => crosses(a, b, frame)).length
+      overlaps += overlap(a, b)
     }
-    return [crossings, length, route.length]
+    return [crossings, overlaps, length, route.length]
   }
-  const route = routes.map((points) => ({ points, score: score(points) }))
-    .sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1] || a.score[2] - b.score[2])[0].points
-  const length = score(route)[1]
+  const chosen = routes.map((points) => ({ points, score: score(points) }))
+    .sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1]
+      || a.score[2] - b.score[2] || a.score[3] - b.score[3])[0]
+  const route = chosen.points
+  const length = chosen.score[2]
   let remaining = length / 2
   let middle = route[0]
   for (let index = 1; index < route.length; index += 1) {
@@ -405,6 +445,7 @@ export function linkPath(from, to, arrows = 'end', obstacles = []) {
     arrows: [from, to].filter((_, index) => gaps[index]).map(head),
     middle: point(middle),
     ends: { from: point(off(from, gaps[0] / 2)), to: point(off(to, gaps[1] / 2)) },
+    points: route,
   }
 }
 
