@@ -924,9 +924,21 @@ test('link sides follow the blocks', () => {
   assert.deepEqual(linkSides(box(0, 0), { x: 300, y: 20, width: 0, height: 0 }), ['right', 'left'])
 })
 
-test('a link is a curve square to its sides, with the arrowhead off the frame', () => {
+const pathPoints = (d) => [...d.matchAll(/[ML](-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g)]
+  .map(([, x, y]) => ({ x: Number(x), y: Number(y) }))
+
+const assertOrthogonal = (d) => {
+  assert.doesNotMatch(d, /[CQAST]/)
+  const points = pathPoints(d)
+  assert.ok(points.length >= 2)
+  for (let index = 1; index < points.length; index += 1) {
+    assert.ok(points[index - 1].x === points[index].x || points[index - 1].y === points[index].y)
+  }
+  return points
+}
+
+test('a link is an orthogonal polyline square to its sides, with the arrowhead off the frame', () => {
   const { linkAnchor, linkFrame, linkPath, nearestLinkSide } = mapModel
-  // Mockup 9a: two 230×48 blocks in one column.
   const source = { x: 34, y: 144, width: 230, height: 48 }
   const target = { x: 34, y: 20, width: 230, height: 48 }
 
@@ -938,21 +950,52 @@ test('a link is a curve square to its sides, with the arrowhead off the frame', 
   assert.equal(nearestLinkSide(source, { x: 150, y: 200 }), 'bottom')
   assert.equal(nearestLinkSide(source, { x: 30, y: 168 }), 'left')
 
-  const path = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'))
-  assert.equal(path.d, 'M270,168 C332,168 332,44 278,44')
+  const obstacles = [source, target]
+  const path = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'end', obstacles)
+  assert.equal(path.d, 'M270,168 L286,168 L286,44 L278,44')
+  assertOrthogonal(path.d)
   assert.deepEqual(path.arrows, ['M279,48 L272,44 L279,40'])
-  assert.deepEqual(path.middle, { x: 317.5, y: 106 })
+  assert.deepEqual(path.middle, { x: 286, y: 110 })
   assert.deepEqual(path.ends, { from: { x: 270, y: 168 }, to: { x: 274, y: 44 } })
 
-  const both = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'both')
-  assert.equal(both.d, 'M278,168 C332,168 332,44 278,44')
+  const both = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'both', obstacles)
+  assert.equal(both.d, 'M278,168 L286,168 L286,44 L278,44')
   assert.equal(both.arrows.length, 2)
-  const none = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'none')
-  assert.equal(none.d, 'M270,168 C332,168 332,44 270,44')
+  const none = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'right'), 'none', obstacles)
+  assert.equal(none.d, 'M270,168 L286,168 L286,44 L270,44')
   assert.deepEqual(none.arrows, [])
-  // The reach of the control points is half the distance, kept between 40 and 160.
-  assert.match(linkPath({ x: 0, y: 0, nx: 1, ny: 0 }, { x: 20, y: 0, nx: -1, ny: 0 }, 'none').d, /C40,0 -20,0/)
-  assert.match(linkPath({ x: 0, y: 0, nx: 0, ny: 1 }, { x: 0, y: 900, nx: 0, ny: -1 }, 'none').d, /C0,160 0,740/)
+})
+
+test('an orthogonal link takes a clear corridor around a blocking node', () => {
+  const { linkAnchor, linkPath } = mapModel
+  const source = { x: 0, y: 40, width: 40, height: 20 }
+  const blocker = { x: 100, y: 20, width: 40, height: 60 }
+  const target = { x: 200, y: 40, width: 40, height: 20 }
+  const path = linkPath(linkAnchor(source, 'right'), linkAnchor(target, 'left'), 'none', [source, blocker, target])
+  const points = assertOrthogonal(path.d)
+  const blocked = { left: 94, right: 146, top: 14, bottom: 86 }
+  const crosses = (a, b) => a.x === b.x
+    ? a.x > blocked.left && a.x < blocked.right && Math.max(a.y, b.y) > blocked.top && Math.min(a.y, b.y) < blocked.bottom
+    : a.y > blocked.top && a.y < blocked.bottom && Math.max(a.x, b.x) > blocked.left && Math.min(a.x, b.x) < blocked.right
+
+  assert.ok(points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)))
+  assert.ok(points.slice(1).every((point, index) => !crosses(points[index], point)))
+  assert.ok(points[1].x > points[0].x)
+  assert.ok(points.at(-2).x < points.at(-1).x)
+  assert.ok(points.some((point) => point.y < blocked.top || point.y > blocked.bottom))
+})
+
+test('orthogonal routing stays finite when every candidate crosses an obstacle', () => {
+  const path = mapModel.linkPath(
+    { x: 0, y: 0, nx: 1, ny: 0 },
+    { x: 100, y: 100, nx: -1, ny: 0 },
+    'none',
+    [{ x: -20, y: -20, width: 140, height: 140 }],
+  )
+
+  assertOrthogonal(path.d)
+  assert.ok(Number.isFinite(path.middle.x))
+  assert.ok(Number.isFinite(path.middle.y))
 })
 
 test('library keeps valid Drive backup metadata and drops broken ones', () => {

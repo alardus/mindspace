@@ -2097,6 +2097,7 @@ const nodeBox = (node) => ({
   width: node.dimensions?.width || DEFAULT_SIZE.width,
   height: node.dimensions?.height || DEFAULT_SIZE.height,
 })
+const linkObstacles = computed(() => nodes.value.filter((node) => !node.hidden).map(nodeBox))
 const linkEnd = (node) => ({ ...nodeBox(node), side: node.data.side, level: depths.value.get(node.id) })
 
 // A block hidden in a collapsed branch hands its links to the nearest visible ancestor.
@@ -2115,7 +2116,7 @@ const drawnLinks = computed(() => links.value.flatMap((link) => {
   return [{
     link,
     ghost: from.id !== link.from || to.id !== link.to,
-    ...linkPath(linkAnchor(ends[0], sides[0]), linkAnchor(ends[1], sides[1]), link.arrows),
+    ...linkPath(linkAnchor(ends[0], sides[0]), linkAnchor(ends[1], sides[1]), link.arrows, linkObstacles.value),
   }]
 }))
 const selectedDrawn = computed(() => drawnLinks.value.find((item) => item.link.id === selectedLinkId.value))
@@ -2136,7 +2137,7 @@ const linkPreview = computed(() => {
   const sides = linkSides(...ends)
   const anchors = ends.map((end, index) => linkAnchor(end, sides[index], end === moving && !target ? 0 : LINK_FRAME))
   const [origin, snap] = drag.end === 'to' ? anchors : [anchors[1], anchors[0]]
-  return { d: linkPath(...anchors, 'none').d, frame: target && linkFrame(nodeBox(target)), origin, snap: target && snap }
+  return { d: linkPath(...anchors, 'none', linkObstacles.value).d, frame: target && linkFrame(nodeBox(target)), origin, snap: target && snap }
 })
 
 // The visible block whose link frame, grown by `reach`, is under the point; the nearest one where frames overlap.

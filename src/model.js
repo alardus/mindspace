@@ -321,10 +321,9 @@ export function linkSides(source, target) {
   return [free(source, facing, vertical), free(target, OPPOSITE_SIDE[facing], OPPOSITE_SIDE[vertical])]
 }
 
-// The curve leaves and arrives square to its sides. An arrowhead is a 7×8 chevron with its tip 2px off the frame;
+// The line leaves and arrives square to its sides. An arrowhead is a 7×8 chevron with its tip 2px off the frame;
 // the line stops 6px short of the tip. `ends` are where the handles of a selected link sit.
-export function linkPath(from, to, arrows = 'end') {
-  const reach = Math.min(160, Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) / 2))
+export function linkPath(from, to, arrows = 'end', obstacles = []) {
   const off = (anchor, distance) => [anchor.x + anchor.nx * distance, anchor.y + anchor.ny * distance]
   const head = (anchor) => {
     const [x, y] = off(anchor, 9)
@@ -332,12 +331,79 @@ export function linkPath(from, to, arrows = 'end') {
   }
   const gaps = [arrows === 'both' ? 8 : 0, arrows === 'none' ? 0 : 8]
   const [start, end] = [off(from, gaps[0]), off(to, gaps[1])]
-  const [c1, c2] = [off(from, reach), off(to, reach)]
+  const stub = 16
+  const [first, last] = [off(from, stub), off(to, stub)]
+  const frames = obstacles.map((rect) => linkFrame(rect))
+  let left = Math.min(first[0], last[0])
+  let right = Math.max(first[0], last[0])
+  let top = Math.min(first[1], last[1])
+  let bottom = Math.max(first[1], last[1])
+  for (const frame of frames) {
+    left = Math.min(left, frame.x)
+    right = Math.max(right, frame.x + frame.width)
+    top = Math.min(top, frame.y)
+    bottom = Math.max(bottom, frame.y + frame.height)
+  }
+  left -= stub
+  right += stub
+  top -= stub
+  bottom += stub
+  const simplify = (points) => {
+    const result = []
+    for (const current of points) {
+      if (result.at(-1)?.[0] === current[0] && result.at(-1)?.[1] === current[1]) continue
+      result.push(current)
+      while (result.length >= 3) {
+        const [a, b, c] = result.slice(-3)
+        if ((a[0] !== b[0] || b[0] !== c[0]) && (a[1] !== b[1] || b[1] !== c[1])) break
+        result.splice(-2, 1)
+      }
+    }
+    return result
+  }
+  const routes = [
+    [start, first, [last[0], first[1]], last, end],
+    [start, first, [first[0], last[1]], last, end],
+    [start, first, [left, first[1]], [left, last[1]], last, end],
+    [start, first, [right, first[1]], [right, last[1]], last, end],
+    [start, first, [first[0], top], [last[0], top], last, end],
+    [start, first, [first[0], bottom], [last[0], bottom], last, end],
+  ].map(simplify)
+  const crosses = (a, b, frame) => a[0] === b[0]
+    ? a[0] > frame.x && a[0] < frame.x + frame.width
+      && Math.max(a[1], b[1]) > frame.y && Math.min(a[1], b[1]) < frame.y + frame.height
+    : a[1] > frame.y && a[1] < frame.y + frame.height
+      && Math.max(a[0], b[0]) > frame.x && Math.min(a[0], b[0]) < frame.x + frame.width
+  const score = (route) => {
+    let crossings = 0
+    let length = 0
+    for (let index = 1; index < route.length; index += 1) {
+      const [a, b] = [route[index - 1], route[index]]
+      length += Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1])
+      crossings += frames.filter((frame) => crosses(a, b, frame)).length
+    }
+    return [crossings, length, route.length]
+  }
+  const route = routes.map((points) => ({ points, score: score(points) }))
+    .sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1] || a.score[2] - b.score[2])[0].points
+  const length = score(route)[1]
+  let remaining = length / 2
+  let middle = route[0]
+  for (let index = 1; index < route.length; index += 1) {
+    const [a, b] = [route[index - 1], route[index]]
+    const distance = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1])
+    if (remaining <= distance) {
+      const ratio = distance ? remaining / distance : 0
+      middle = [a[0] + (b[0] - a[0]) * ratio, a[1] + (b[1] - a[1]) * ratio]
+      break
+    }
+    remaining -= distance
+  }
   const point = ([x, y]) => ({ x, y })
   return {
-    d: `M${start} C${c1} ${c2} ${end}`,
+    d: route.map((position, index) => `${index ? 'L' : 'M'}${position}`).join(' '),
     arrows: [from, to].filter((_, index) => gaps[index]).map(head),
-    middle: { x: (start[0] + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, y: (start[1] + 3 * c1[1] + 3 * c2[1] + end[1]) / 8 },
+    middle: point(middle),
     ends: { from: point(off(from, gaps[0] / 2)), to: point(off(to, gaps[1] / 2)) },
   }
 }
