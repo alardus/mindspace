@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { formatShortcut, normalizeTextFormats, readEditorValue, safeTextHref, sameRichText, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
+import { formatShortcut, normalizeTextFormats, parseInlineMarkdown, readEditorValue, safeTextHref, sameRichText, textRuns, toInlineMarkdown, toggleTextFormat, trimRichText } from '../src/rich-text.js'
 
 const domText = (data) => ({ nodeType: 3, data })
 const domElement = (name, ...childNodes) => ({ nodeType: 1, nodeName: name.toUpperCase(), childNodes })
@@ -90,6 +90,51 @@ test('read-only links accept only absolute web URLs', () => {
   assert.equal(safeTextHref('http://example.org'), 'http://example.org')
   assert.equal(safeTextHref('javascript:alert(1)'), null)
   assert.equal(safeTextHref('/relative'), null)
+})
+
+test('inline Markdown round-trips bold italic and strike', () => {
+  const value = {
+    text: 'Bold italic gone',
+    formats: [
+      { from: 0, to: 4, style: 'bold' },
+      { from: 5, to: 11, style: 'italic' },
+      { from: 12, to: 16, style: 'strike' },
+    ],
+  }
+  const source = '**Bold** *italic* ~~gone~~'
+  assert.equal(toInlineMarkdown(value.text, value.formats), source)
+  assert.deepEqual(parseInlineMarkdown(source), value)
+})
+
+test('inline Markdown preserves literal delimiters and backslashes', () => {
+  const text = String.raw`Use *stars*, ~~waves~~, and \ paths`
+  const source = String.raw`Use \*stars\*, \~\~waves\~\~, and \\ paths`
+  assert.equal(toInlineMarkdown(text, []), source)
+  assert.deepEqual(parseInlineMarkdown(source), { text, formats: [] })
+})
+
+test('inline Markdown round-trips crossing styles without changing visible text', () => {
+  const value = {
+    text: 'abcdef',
+    formats: [
+      { from: 0, to: 4, style: 'bold' },
+      { from: 2, to: 6, style: 'italic' },
+    ],
+  }
+  const source = '**ab*****cd****ef*'
+  assert.equal(toInlineMarkdown(value.text, value.formats), source)
+  assert.deepEqual(parseInlineMarkdown(source), value)
+})
+
+test('unmatched Markdown delimiters remain literal', () => {
+  const source = 'before **open and *odd'
+  assert.deepEqual(parseInlineMarkdown(source), { text: source, formats: [] })
+  assert.deepEqual(parseInlineMarkdown('end**'), { text: 'end**', formats: [] })
+})
+
+test('deeply nested inline Markdown stays bounded', () => {
+  const source = `${'***~~'.repeat(2000)}text`
+  assert.doesNotThrow(() => parseInlineMarkdown(source))
 })
 
 test('editor DOM becomes plain text and supported formatting ranges', () => {

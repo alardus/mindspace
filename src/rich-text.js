@@ -108,6 +108,71 @@ export function safeTextHref(value) {
   return typeof value === 'string' && /^https?:\/\//iu.test(value) && URL.canParse(value) ? value : null
 }
 
+const INLINE_MARKERS = { bold: '**', italic: '*', strike: '~~' }
+const MAX_INLINE_DEPTH = 32
+
+export function toInlineMarkdown(text, formats) {
+  return textRuns(text, formats).map((run) => {
+    const markers = run.styles.map((style) => INLINE_MARKERS[style])
+    const escaped = run.text.replace(/[\\*~]/gu, '\\$&')
+    return `${markers.join('')}${escaped}${markers.toReversed().join('')}`
+  }).join('')
+}
+
+export function parseInlineMarkdown(source) {
+  const input = String(source ?? '')
+  const parse = (from, stop = null, depth = 0) => {
+    let index = from
+    let text = ''
+    const formats = []
+    while (index < input.length) {
+      const closing = stop && INLINE_MARKERS[stop]
+      if (closing && input.startsWith(closing, index)) {
+        return { matched: true, index: index + closing.length, text, formats }
+      }
+      if (input[index] === '\\') {
+        const next = input[index + 1]
+        if (next && /[\\*~]/u.test(next)) {
+          text += next
+          index += 2
+        } else {
+          text += '\\'
+          index += 1
+        }
+        continue
+      }
+      const style = input.startsWith('**', index) ? 'bold'
+        : input[index] === '*' ? 'italic'
+          : input.startsWith('~~', index) ? 'strike' : null
+      if (!style) {
+        text += input[index]
+        index += 1
+        continue
+      }
+      const marker = INLINE_MARKERS[style]
+      if (depth >= MAX_INLINE_DEPTH) {
+        text += marker
+        index += marker.length
+        continue
+      }
+      const nested = parse(index + marker.length, style, depth + 1)
+      const offset = text.length
+      if (!nested.matched) text += marker
+      text += nested.text
+      formats.push(...nested.formats.map((range) => ({
+        from: range.from + offset + (nested.matched ? 0 : marker.length),
+        to: range.to + offset + (nested.matched ? 0 : marker.length),
+        style: range.style,
+      })))
+      if (nested.matched && nested.text) formats.push({ from: offset, to: text.length, style })
+      index = nested.index
+    }
+    return { matched: false, index, text, formats }
+  }
+  const parsed = parse(0)
+  return { text: parsed.text, formats: normalizeTextFormats(parsed.text, parsed.formats) }
+}
+
 const TAG_STYLE = {
   B: 'bold',
   STRONG: 'bold',

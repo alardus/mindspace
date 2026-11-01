@@ -520,6 +520,67 @@ Other → Project (“blocks”)
   assert.deepEqual(parseMarkdown(toMarkdown(map)).nodes.map((node) => node.data.label), ['Project', '[Image]', 'Other'])
 })
 
+test('Markdown export and import preserve formatted block titles and Details', () => {
+  const original = normalizeMap({
+    title: 'Rich map',
+    nodes: [{
+      id: 'formatted',
+      data: {
+        label: 'Crossing *literal*',
+        labelFormats: [
+          { from: 0, to: 6, style: 'bold' },
+          { from: 3, to: 8, style: 'italic' },
+        ],
+        note: 'Review Friday',
+        noteFormats: [
+          { from: 0, to: 10, style: 'bold' },
+          { from: 7, to: 13, style: 'strike' },
+        ],
+      },
+    }],
+    edges: [],
+  })
+
+  const markdown = toMarkdown(original)
+  const imported = parseMarkdown(markdown)
+  assert.match(markdown, /\\\*literal\\\*/)
+  assert.deepEqual(imported.nodes[0].data, original.nodes[0].data)
+
+  const withHeading = parseMarkdown(String.raw`# Rich map
+
+## **Heading** \*literal\*
+- Plain
+  > *Review* and ~~Friday~~
+`)
+  assert.equal(withHeading.nodes[0].data.label, 'Heading *literal*')
+  assert.deepEqual(withHeading.nodes[0].data.labelFormats, [{ from: 0, to: 7, style: 'bold' }])
+  assert.equal(withHeading.nodes[1].data.note, 'Review and Friday')
+  assert.deepEqual(withHeading.nodes[1].data.noteFormats, [
+    { from: 0, to: 6, style: 'italic' },
+    { from: 11, to: 17, style: 'strike' },
+  ])
+})
+
+test('OPML remains plain text', () => {
+  const map = normalizeMap({
+    title: 'Plain interchange',
+    nodes: [{
+      id: 'formatted',
+      data: {
+        label: 'Bold',
+        labelFormats: [{ from: 0, to: 4, style: 'bold' }],
+        note: 'Gone',
+        noteFormats: [{ from: 0, to: 4, style: 'strike' }],
+      },
+    }],
+    edges: [],
+  })
+
+  const opml = toOpml(map)
+  assert.match(opml, /<outline text="Bold" _note="Gone"\/>/)
+  assert.doesNotMatch(opml, /\*\*|~~/)
+})
+
 test('Markdown round-trip preserves notes that look like structure', () => {
   const notes = ['# status', '- detail', '* detail', '+ detail', '1. step', '2) step', '```js', '~~~', '\\# literal', '1\\. literal', '> quote']
   const map = normalizeMap({

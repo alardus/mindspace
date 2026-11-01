@@ -1,4 +1,4 @@
-import { normalizeTextFormats } from './rich-text.js'
+import { normalizeTextFormats, parseInlineMarkdown, toInlineMarkdown, trimRichText } from './rich-text.js'
 
 export const STORAGE_KEY = 'mindspace-map-v1'
 export const LIBRARY_STORAGE_KEY = 'mindspace-library-v1'
@@ -1039,13 +1039,14 @@ export function toMarkdown(map) {
   const byId = new Map(map.nodes.map((node) => [node.id, node]))
   const visited = new Set()
   const clean = (value) => String(value ?? '').replace(/\s*\n\s*/g, ' ').trim()
+  const inline = (data, field) => clean(toInlineMarkdown(data[field] ?? '', data[`${field}Formats`]))
   const item = (id, depth) => {
     const node = byId.get(id)
     if (!node || visited.has(id)) return ''
     visited.add(id)
     const pad = '  '.repeat(depth)
-    const label = markPrefix(node) + (clean(node.data.label) || (node.data.image ? '[Image]' : 'Untitled'))
-    const note = clean(node.data.note)
+    const label = markPrefix(node) + (inline(node.data, 'label') || (node.data.image ? '[Image]' : 'Untitled'))
+    const note = inline(node.data, 'note')
     return `${pad}- ${label}\n${note ? `${pad}  > ${note}\n` : ''}${(children.get(id) ?? []).map((child) => item(child, depth + 1)).join('')}`
   }
   const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => item(node.id, 0)).join('')
@@ -1119,16 +1120,33 @@ export function parseMarkdown(text, fallbackTitle = 'Untitled') {
   let activeHeading = null
   let fence = null
   let rootIndex = 0
-  const add = (label, parent = null) => {
+  const add = (source, parent = null) => {
     if (nodes.length >= 5000) throw new Error('The Markdown file has more than 5000 nodes')
-    const node = makeNode(label.trim().slice(0, MAX_LABEL_LENGTH), undefined, {
+    const label = parseInlineMarkdown(source)
+    const value = trimRichText(label.text, label.formats, MAX_LABEL_LENGTH)
+    const node = makeNode(value.text, undefined, {
       color: parent?.data.color ?? branchColor(rootIndex++),
+      labelFormats: value.formats,
     })
     nodes.push(node)
     if (parent) edges.push(makeEdge(parent.id, node.id))
     return node
   }
   const indentOf = (value) => value.replaceAll('\t', '    ').length
+  const appendNote = (node, source) => {
+    const parsed = parseInlineMarkdown(source)
+    const separator = node.data.note ? ' ' : ''
+    const value = trimRichText(parsed.text, parsed.formats, 200 - node.data.note.length - separator.length)
+    if (!value.text) return
+    const offset = node.data.note.length + separator.length
+    node.data.note += separator + value.text
+    const formats = [...(node.data.noteFormats ?? []), ...value.formats.map((range) => ({
+      from: range.from + offset,
+      to: range.to + offset,
+      style: range.style,
+    }))]
+    if (formats.length) node.data.noteFormats = formats
+  }
 
   for (const line of String(text).replace(/^\uFEFF/, '').replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')) {
     const closingFence = line.match(/^ {0,3}(`+|~+)[\t ]*$/)
@@ -1177,7 +1195,7 @@ export function parseMarkdown(text, fallbackTitle = 'Untitled') {
     const owner = list.findLast((entry) => entry.indent < indentOf(leading))
     if (owner && line.trim()) {
       const note = line.trim().replace(/^>[\t ]/, '')
-      owner.node.data.note = `${owner.node.data.note} ${note}`.trim().slice(0, 200)
+      appendNote(owner.node, note)
     }
   }
 
