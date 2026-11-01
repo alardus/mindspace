@@ -104,6 +104,10 @@ export function textRuns(text, formats, annotations = []) {
   })
 }
 
+export function safeTextHref(value) {
+  return typeof value === 'string' && /^https?:\/\//iu.test(value) && URL.canParse(value) ? value : null
+}
+
 const TAG_STYLE = {
   B: 'bold',
   STRONG: 'bold',

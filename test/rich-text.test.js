@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { formatShortcut, normalizeTextFormats, readEditorValue, sameRichText, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
+import { formatShortcut, normalizeTextFormats, readEditorValue, safeTextHref, sameRichText, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
 
 const domText = (data) => ({ nodeType: 3, data })
 const domElement = (name, ...childNodes) => ({ nodeType: 1, nodeName: name.toUpperCase(), childNodes })
@@ -83,6 +83,13 @@ test('text runs combine crossing styles with link and search annotations', () =>
     { from: 2, to: 3, text: 'c', styles: ['bold'], href: 'https://example.com', match: true },
     { from: 3, to: 4, text: 's', styles: [], href: 'https://example.com', match: true },
   ])
+})
+
+test('read-only links accept only absolute web URLs', () => {
+  assert.equal(safeTextHref('https://example.com/docs'), 'https://example.com/docs')
+  assert.equal(safeTextHref('http://example.org'), 'http://example.org')
+  assert.equal(safeTextHref('javascript:alert(1)'), null)
+  assert.equal(safeTextHref('/relative'), null)
 })
 
 test('editor DOM becomes plain text and supported formatting ranges', () => {

@@ -22,14 +22,14 @@ import {
   descendantsOf,
   freeObjectIdsInRect,
   freeTextHeight,
-  highlightParts,
+  highlightRanges,
   insertTreeEdgeAfter,
   layoutVerticalGap,
   layoutNodes,
   linkAnchor,
   linkAnchorOffsets,
   linkFrame,
-  linkParts,
+  linkRanges,
   linkPath,
   linkSides,
   makeEdge,
@@ -96,6 +96,7 @@ import {
 } from './clipboard.js'
 import Logo from './Logo.vue'
 import MarkIcon from './MarkIcon.vue'
+import RichText from './RichText.vue'
 import RichTextEditor from './RichTextEditor.vue'
 import { trimRichText } from './rich-text.js'
 import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, insertLineBreak, keyLabel, selectAllCanvasObjects, shortcutGroups, shortcutKeys, typingTarget } from './shortcuts.js'
@@ -1299,11 +1300,12 @@ watch([searchPath, searchCurrentId, searchTerm], () => {
   }
 })
 const searchState = (id) => searchMarks.get(id)?.state
-const searchParts = (id, text) => {
+const displayAnnotations = (id, text) => {
+  const annotations = linkRanges(text)
   const mark = searchMarks.get(id)
-  return mark && mark.state !== 'path' ? highlightParts(text, mark.term) : [{ text, match: false }]
+  if (mark && mark.state !== 'path') annotations.push(...highlightRanges(text, mark.term))
+  return annotations
 }
-const displayParts = (id, text) => linkParts(text).map((part) => ({ ...part, search: searchParts(id, part.text) }))
 const onTextLinkClick = (event) => {
   if (!hasMod(event)) event.preventDefault()
 }
@@ -3715,29 +3717,19 @@ onBeforeUnmount(() => {
               <template v-else>
                 <div v-if="data.label" class="node-head">
                   <MarkIcon v-for="mark in data.marks" :id="mark" :key="mark" :data-mark="mark" />
-                  <span class="node-title"><component
-                    :is="part.href ? 'a' : 'span'"
-                    v-for="(part, index) in displayParts(id, blockPreview(data.label))"
-                    :key="index"
-                    :class="{ 'node-link': part.href, nodrag: part.href }"
-                    :href="part.href"
-                    :target="part.href ? '_blank' : undefined"
-                    :rel="part.href ? 'noopener' : undefined"
-                    :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
-                    @click="part.href && onTextLinkClick($event)"
-                  ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                  <span class="node-title"><RichText
+                    :text="blockPreview(data.label)"
+                    :formats="data.labelFormats"
+                    :annotations="displayAnnotations(id, blockPreview(data.label))"
+                    @link-click="onTextLinkClick"
+                  /></span>
                 </div>
-                <span v-if="data.note" class="node-note"><component
-                  :is="part.href ? 'a' : 'span'"
-                  v-for="(part, index) in displayParts(id, data.note)"
-                  :key="index"
-                  :class="{ 'node-link': part.href, nodrag: part.href }"
-                  :href="part.href"
-                  :target="part.href ? '_blank' : undefined"
-                  :rel="part.href ? 'noopener' : undefined"
-                  :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
-                  @click="part.href && onTextLinkClick($event)"
-                ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                <span v-if="data.note" class="node-note"><RichText
+                  :text="data.note"
+                  :formats="data.noteFormats"
+                  :annotations="displayAnnotations(id, data.note)"
+                  @link-click="onTextLinkClick"
+                /></span>
               </template>
               <div
                 v-if="!data.root || hasChildren(id)"

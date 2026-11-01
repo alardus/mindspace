@@ -8,15 +8,23 @@ export const blockPreview = (text) => {
   return symbols.length > 1000 ? `${symbols.slice(0, 1000).join('')}...` : text
 }
 
-export function linkParts(text) {
-  const parts = []
-  let from = 0
+export function linkRanges(text) {
+  const ranges = []
   for (const match of text.matchAll(/https?:\/\/[^\s<]+/giu)) {
     const href = match[0].replace(/[),.;:!?\]}'"’”]+$/u, '')
     if (!URL.canParse(href)) continue
-    if (match.index > from) parts.push({ text: text.slice(from, match.index) })
-    parts.push({ text: href, href })
-    from = match.index + href.length
+    ranges.push({ from: match.index, to: match.index + href.length, href })
+  }
+  return ranges
+}
+
+export function linkParts(text) {
+  const parts = []
+  let from = 0
+  for (const range of linkRanges(text)) {
+    if (range.from > from) parts.push({ text: text.slice(from, range.from) })
+    parts.push({ text: text.slice(range.from, range.to), href: range.href })
+    from = range.to
   }
   if (from < text.length) parts.push({ text: text.slice(from) })
   return parts
@@ -1258,16 +1266,28 @@ export function nextMatch(order, matches, anchorId) {
   return matches.find((id) => position.get(id) > from) ?? matches[0] ?? null
 }
 
-// Splits text into plain and matched parts; no empty parts.
-export function highlightParts(text, term) {
+export function highlightRanges(text, term) {
   const haystack = normalizeSearch(text)
-  if (!term || haystack.length !== text.length) return [{ text, match: false }]
-  const parts = []
+  if (!term || haystack.length !== text.length) return []
+  const ranges = []
   let from = 0
   for (let at = haystack.indexOf(term); at >= 0; at = haystack.indexOf(term, from)) {
-    if (at > from) parts.push({ text: text.slice(from, at), match: false })
     from = at + term.length
-    parts.push({ text: text.slice(at, from), match: true })
+    ranges.push({ from: at, to: from, match: true })
+  }
+  return ranges
+}
+
+// Splits text into plain and matched parts; no empty parts.
+export function highlightParts(text, term) {
+  const ranges = highlightRanges(text, term)
+  if (!ranges.length) return [{ text, match: false }]
+  const parts = []
+  let from = 0
+  for (const range of ranges) {
+    if (range.from > from) parts.push({ text: text.slice(from, range.from), match: false })
+    parts.push({ text: text.slice(range.from, range.to), match: true })
+    from = range.to
   }
   if (from < text.length) parts.push({ text: text.slice(from), match: false })
   return parts
