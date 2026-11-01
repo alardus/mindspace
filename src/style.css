@@ -516,6 +516,7 @@ svg.logo { flex: none; fill: currentColor; stroke: none; }
 /* Root: a card by default, text larger and centered in any style */
 .mind-node.root { align-items: center; justify-content: center; min-width: 200px; max-width: 320px; text-align: center; }
 .mind-node.root .node-title { font-size: 17px; font-weight: 600; letter-spacing: -.01em; line-height: 22px; }
+.mind-node.root .node-title[contenteditable="true"] { font-weight: 500; }
 .mind-node.root.style-card { min-height: 56px; padding: 6px 24px; border-color: var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-island); }
 .mind-node.root.style-card:hover { background: var(--surface); border-color: var(--border-strong); }
 .mind-node.root.style-card.selected, .mind-node.root.style-card.editing { background: var(--surface); border-color: var(--branch); box-shadow: 0 0 0 3px var(--branch-halo), var(--shadow-island); }

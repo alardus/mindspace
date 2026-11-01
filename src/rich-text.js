@@ -159,12 +159,15 @@ export function parseInlineMarkdown(source) {
       const offset = text.length
       if (!nested.matched) text += marker
       text += nested.text
-      formats.push(...nested.formats.map((range) => ({
-        from: range.from + offset + (nested.matched ? 0 : marker.length),
-        to: range.to + offset + (nested.matched ? 0 : marker.length),
-        style: range.style,
-      })))
-      if (nested.matched && nested.text) formats.push({ from: offset, to: text.length, style })
+      for (const range of nested.formats) {
+        if (formats.length >= MAX_FORMAT_RANGES) break
+        formats.push({
+          from: range.from + offset + (nested.matched ? 0 : marker.length),
+          to: range.to + offset + (nested.matched ? 0 : marker.length),
+          style: range.style,
+        })
+      }
+      if (nested.matched && nested.text && formats.length < MAX_FORMAT_RANGES) formats.push({ from: offset, to: text.length, style })
       index = nested.index
     }
     return { matched: false, index, text, formats }

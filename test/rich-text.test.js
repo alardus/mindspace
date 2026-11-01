@@ -137,6 +137,14 @@ test('deeply nested inline Markdown stays bounded', () => {
   assert.doesNotThrow(() => parseInlineMarkdown(source))
 })
 
+test('long inline Markdown preserves text and bounds accumulated formatting ranges', () => {
+  const parsed = parseInlineMarkdown(`**${'*a* '.repeat(150_000)}**`)
+  assert.equal(parsed.text, 'a '.repeat(150_000))
+  assert.equal(parsed.formats.length, 30_000)
+  assert.deepEqual(parsed.formats[0], { from: 0, to: 1, style: 'italic' })
+  assert.deepEqual(parsed.formats.at(-1), { from: 59_998, to: 59_999, style: 'italic' })
+})
+
 test('editor DOM becomes plain text and supported formatting ranges', () => {
   const root = domElement('div',
     domElement('strong', domText('Bold '), domElement('em', domText('both'))),

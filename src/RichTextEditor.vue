@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatShortcut, normalizeTextFormats, readEditorValue, sameRichText, textRuns } from './rich-text.js'
+import { formatShortcut, normalizeTextFormats, readEditorValue, sameRichText, textRuns, toggleTextFormat } from './rich-text.js'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -80,6 +80,12 @@ function restoreSelection(range = savedSelection) {
 const commands = { bold: 'bold', italic: 'italic', strike: 'strikeThrough' }
 function activeStyles() {
   if (document.activeElement !== root.value) return []
+  const selection = currentSelection()
+  if (selection && selection.from !== selection.to) {
+    const value = readEditorValue(root.value)
+    return Object.keys(commands).filter((style) => value.formats.some((range) => range.style === style
+      && range.from <= selection.from && range.to >= selection.to))
+  }
   return Object.entries(commands).flatMap(([style, command]) => document.queryCommandState(command) ? [style] : [])
 }
 const reportState = () => emit('format-state', activeStyles())
@@ -94,10 +100,7 @@ function sync() {
   reportState()
 }
 
-function renderModel() {
-  if (!root.value) return
-  const value = { text: String(props.modelValue?.text ?? ''), formats: props.modelValue?.formats }
-  if (sameRichText(readEditorValue(root.value), value)) return
+function editorContent(value) {
   const fragment = document.createDocumentFragment()
   for (const run of textRuns(value.text, value.formats)) {
     let content = document.createTextNode(run.text)
@@ -111,7 +114,14 @@ function renderModel() {
     span.append(content)
     fragment.append(span)
   }
-  root.value.replaceChildren(fragment)
+  return fragment
+}
+
+function renderModel() {
+  if (!root.value) return
+  const value = { text: String(props.modelValue?.text ?? ''), formats: props.modelValue?.formats }
+  if (sameRichText(readEditorValue(root.value), value)) return
+  root.value.replaceChildren(editorContent(value))
   const length = value.text.length
   if (savedSelection) savedSelection = { from: Math.min(savedSelection.from, length), to: Math.min(savedSelection.to, length) }
   nextTick(() => {
@@ -156,7 +166,19 @@ function toggle(style) {
   focus()
   restoreSelection()
   const before = currentSelection()
-  document.execCommand(command)
+  if (before && before.from !== before.to) {
+    const value = readEditorValue(root.value)
+    const formats = toggleTextFormat(value.text, value.formats, style, before.from, before.to)
+    const content = document.createElement('div')
+    content.append(editorContent({ text: value.text, formats }))
+    const range = document.createRange()
+    range.selectNodeContents(root.value)
+    window.getSelection().removeAllRanges()
+    window.getSelection().addRange(range)
+    // One native edit keeps a mixed-format toggle in a single undo step.
+    document.execCommand('insertHTML', false, content.innerHTML)
+    restoreSelection(before)
+  } else document.execCommand(command)
   savedSelection = currentSelection()
   if (before?.from === before?.to) reportState()
   else sync()
