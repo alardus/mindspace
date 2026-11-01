@@ -1,6 +1,6 @@
 <script setup>
-import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, onUpdated, ref } from 'vue'
-import { formatShortcut, normalizeTextFormats, readEditorValue, textRuns } from './rich-text.js'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { formatShortcut, normalizeTextFormats, readEditorValue, sameRichText, textRuns } from './rich-text.js'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -12,23 +12,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue', 'activate', 'format-state', 'keydown', 'focus', 'blur'])
 const root = ref(null)
-const revision = ref(0)
 let savedSelection = null
-
-const RichRun = defineComponent({
-  props: { run: { type: Object, required: true } },
-  setup(runProps) {
-    return () => {
-      let content = runProps.run.text
-      if (runProps.run.styles.includes('strike')) content = h('s', content)
-      if (runProps.run.styles.includes('italic')) content = h('em', content)
-      if (runProps.run.styles.includes('bold')) content = h('strong', content)
-      return h('span', content)
-    }
-  },
-})
-
-const runs = computed(() => textRuns(props.modelValue?.text ?? '', props.modelValue?.formats))
 const children = (node) => [...(node?.childNodes ?? [])]
 const nodeLength = (node) => {
   if (node?.nodeType === 3) return String(node.data ?? '').length
@@ -106,8 +90,30 @@ function sync() {
   const text = parsed.text.slice(0, props.maxlength)
   const formats = normalizeTextFormats(text, parsed.formats)
   savedSelection = selection && { from: Math.min(selection.from, text.length), to: Math.min(selection.to, text.length) }
-  revision.value += 1
   emit('update:modelValue', { text, formats })
+  reportState()
+}
+
+function renderModel() {
+  if (!root.value) return
+  const value = { text: String(props.modelValue?.text ?? ''), formats: props.modelValue?.formats }
+  if (sameRichText(readEditorValue(root.value), value)) return
+  const fragment = document.createDocumentFragment()
+  for (const run of textRuns(value.text, value.formats)) {
+    let content = document.createTextNode(run.text)
+    for (const [style, tag] of [['strike', 's'], ['italic', 'em'], ['bold', 'strong']]) {
+      if (!run.styles.includes(style)) continue
+      const wrapper = document.createElement(tag)
+      wrapper.append(content)
+      content = wrapper
+    }
+    const span = document.createElement('span')
+    span.append(content)
+    fragment.append(span)
+  }
+  root.value.replaceChildren(fragment)
+  const length = value.text.length
+  if (savedSelection) savedSelection = { from: Math.min(savedSelection.from, length), to: Math.min(savedSelection.to, length) }
   nextTick(() => {
     if (document.activeElement === root.value) restoreSelection()
     reportState()
@@ -136,7 +142,11 @@ function insertText(value) {
   focus()
   restoreSelection()
   const text = props.multiline ? value : String(value).replace(/\s*\r?\n\s*/g, ' ')
-  document.execCommand('insertText', false, text)
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n')
+  lines.forEach((line, index) => {
+    if (line) document.execCommand('insertText', false, line)
+    if (index < lines.length - 1) document.execCommand('insertLineBreak')
+  })
   sync()
 }
 
@@ -188,11 +198,12 @@ function onSelectionChange() {
   reportState()
 }
 
-onMounted(() => document.addEventListener('selectionchange', onSelectionChange))
-onBeforeUnmount(() => document.removeEventListener('selectionchange', onSelectionChange))
-onUpdated(() => {
-  if (document.activeElement === root.value && savedSelection) restoreSelection()
+onMounted(() => {
+  renderModel()
+  document.addEventListener('selectionchange', onSelectionChange)
 })
+onBeforeUnmount(() => document.removeEventListener('selectionchange', onSelectionChange))
+watch(() => props.modelValue, renderModel, { deep: true })
 
 defineExpose(controller)
 </script>
@@ -212,5 +223,5 @@ defineExpose(controller)
     @blur="onBlur"
     @keydown="onKeydown"
     @paste="onPaste"
-  ><RichRun v-for="run in runs" :key="`${revision}:${run.from}:${run.to}`" :run="run" /></div>
+  ></div>
 </template>

@@ -29,6 +29,15 @@ export function normalizeTextFormats(text, input) {
     || TEXT_STYLES.indexOf(a.style) - TEXT_STYLES.indexOf(b.style))
 }
 
+export function sameRichText(left, right) {
+  const text = String(left?.text ?? '')
+  if (text !== String(right?.text ?? '')) return false
+  const a = normalizeTextFormats(text, left?.formats)
+  const b = normalizeTextFormats(text, right?.formats)
+  return a.length === b.length && a.every((range, index) => range.from === b[index].from
+    && range.to === b[index].to && range.style === b[index].style)
+}
+
 export function trimRichText(text, formats, maxLength = Infinity) {
   const value = String(text ?? '')
   const from = value.length - value.trimStart().length

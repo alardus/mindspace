@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { formatShortcut, normalizeTextFormats, readEditorValue, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
+import { formatShortcut, normalizeTextFormats, readEditorValue, sameRichText, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
 
 const domText = (data) => ({ nodeType: 3, data })
 const domElement = (name, ...childNodes) => ({ nodeType: 1, nodeName: name.toUpperCase(), childNodes })
@@ -126,6 +126,13 @@ test('unsupported pasted markup contributes text but no stored markup or style',
   const root = domElement('div', domText('Safe '), unsafe, domElement('script', domText(' alert(1)')))
 
   assert.deepEqual(readEditorValue(root), { text: 'Safe click alert(1)', formats: [] })
+})
+
+test('rich text equality ignores range order and rejects different editor content', () => {
+  const value = { text: 'Undo', formats: [{ from: 0, to: 4, style: 'bold' }, { from: 1, to: 3, style: 'italic' }] }
+  assert.equal(sameRichText(value, { text: 'Undo', formats: value.formats.toReversed() }), true)
+  assert.equal(sameRichText(value, { text: 'UndoUndo', formats: value.formats }), false)
+  assert.equal(sameRichText(value, { text: 'Undo', formats: [] }), false)
 })
 
 test('format shortcuts recognize Mod-B, Mod-I and Mod-Shift-X only', () => {
