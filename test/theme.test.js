@@ -114,3 +114,7 @@ test('the destructive dialog button keeps readable text in both themes', () => {
   assert.match(css, /\.drive-button\.danger \{[^}]*color: var\(--on-primary\)/)
   for (const tokens of [light, dark]) assert.ok(contrast(tokens['--on-primary'], tokens['--danger']) >= 4.5)
 })
+
+test('read-only block titles preserve explicit line breaks', () => {
+  assert.match(css, /\.node-title \{[^}]*white-space: pre-wrap;/)
+})
