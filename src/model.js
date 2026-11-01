@@ -1,3 +1,5 @@
+import { normalizeTextFormats } from './rich-text.js'
+
 export const STORAGE_KEY = 'mindspace-map-v1'
 export const LIBRARY_STORAGE_KEY = 'mindspace-library-v1'
 export const MAX_LABEL_LENGTH = 10_000
@@ -215,13 +217,14 @@ export function normalizeFreeTexts(input) {
 }
 
 export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
+  const note = typeof options.note === 'string' ? options.note.slice(0, 200) : ''
   const node = {
     id: options.id ?? uid(),
     type: 'mind',
     position,
     data: {
       label,
-      note: typeof options.note === 'string' ? options.note.slice(0, 200) : '',
+      note,
       color: normalizeColor(options.color),
       style: NODE_STYLES.includes(options.style) ? options.style : '',
       manualColor: Boolean(options.manualColor),
@@ -234,6 +237,10 @@ export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
   if (image) node.data.image = image
   const marks = normalizeMarks(options.marks)
   if (marks.length) node.data.marks = marks
+  const labelFormats = normalizeTextFormats(label, options.labelFormats)
+  if (labelFormats.length) node.data.labelFormats = labelFormats
+  const noteFormats = normalizeTextFormats(note, options.noteFormats)
+  if (noteFormats.length) node.data.noteFormats = noteFormats
   return node
 }
 

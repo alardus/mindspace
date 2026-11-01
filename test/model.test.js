@@ -42,6 +42,58 @@ test('block text separates web links from surrounding punctuation', () => {
   ])
 })
 
+test('formatted titles and Details survive map normalization without changing plain text', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: [
+      {
+        id: 'formatted',
+        data: {
+          label: 'Ship carefully',
+          labelFormats: [{ from: 0, to: 4, style: 'bold' }],
+          note: 'Review Friday',
+          noteFormats: [{ from: 7, to: 13, style: 'strike' }],
+        },
+      },
+      { id: 'plain', data: { label: 'Plain', note: 'Details' } },
+    ],
+    edges: [],
+  })
+
+  assert.equal(map.version, 2)
+  assert.equal(map.nodes[0].data.label, 'Ship carefully')
+  assert.equal(map.nodes[0].data.note, 'Review Friday')
+  assert.deepEqual(map.nodes[0].data.labelFormats, [{ from: 0, to: 4, style: 'bold' }])
+  assert.deepEqual(map.nodes[0].data.noteFormats, [{ from: 7, to: 13, style: 'strike' }])
+  assert.equal('labelFormats' in map.nodes[1].data, false)
+  assert.equal('noteFormats' in map.nodes[1].data, false)
+  assert.deepEqual([map.nodes[1].data.label, map.nodes[1].data.note], ['Plain', 'Details'])
+})
+
+test('malformed formatting is dropped without dropping its block', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: [{
+      id: 'safe',
+      data: {
+        label: 'A🙂B',
+        labelFormats: [
+          { from: 2, to: 4, style: 'bold' },
+          { from: 0, to: 1, style: 'script' },
+        ],
+        note: 'Still here',
+        noteFormats: 'not-an-array',
+      },
+    }],
+    edges: [],
+  })
+
+  assert.equal(map.nodes[0].data.label, 'A🙂B')
+  assert.equal(map.nodes[0].data.note, 'Still here')
+  assert.equal('labelFormats' in map.nodes[0].data, false)
+  assert.equal('noteFormats' in map.nodes[0].data, false)
+})
+
 test('attachment proximity follows the cursor beside any part of a block', () => {
   const target = { x: 300, y: 100, width: 80, height: 30 }
 

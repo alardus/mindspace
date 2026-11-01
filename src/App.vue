@@ -464,6 +464,8 @@ function cleanMap() {
           naturalHeight: node.data.image.naturalHeight,
         } } : {}),
         ...(node.data.marks?.length ? { marks: [...node.data.marks] } : {}),
+        ...(node.data.labelFormats?.length ? { labelFormats: node.data.labelFormats.map((range) => ({ ...range })) } : {}),
+        ...(node.data.noteFormats?.length ? { noteFormats: node.data.noteFormats.map((range) => ({ ...range })) } : {}),
       },
     })),
     edges: edges.value.map((edge) => ({

@@ -75,6 +75,27 @@ test('keeps only internal edges and preserves node data', () => {
   })
 })
 
+test('Mindspace branch clipboard preserves title and Details formatting while text/plain stays plain', () => {
+  const root = makeNode('Ship carefully', { x: 0, y: 0 }, {
+    id: 'root',
+    root: true,
+    labelFormats: [{ from: 0, to: 4, style: 'bold' }],
+    note: 'Review Friday',
+    noteFormats: [{ from: 7, to: 13, style: 'strike' }],
+  })
+
+  const serialized = serializeClipboardBranches([root], [], ['root'])
+  const payload = JSON.parse(serialized.custom)
+  assert.deepEqual(payload.nodes[0].data.labelFormats, [{ from: 0, to: 4, style: 'bold' }])
+  assert.deepEqual(payload.nodes[0].data.noteFormats, [{ from: 7, to: 13, style: 'strike' }])
+  assert.equal(serialized.text, 'Ship carefully')
+  assert.doesNotMatch(serialized.text, /\*|~/)
+
+  const parsed = parseMindspaceClipboard(serialized.custom, ids())
+  assert.deepEqual(parsed.nodes[0].data.labelFormats, [{ from: 0, to: 4, style: 'bold' }])
+  assert.deepEqual(parsed.nodes[0].data.noteFormats, [{ from: 7, to: 13, style: 'strike' }])
+})
+
 test('remaps every node and edge id on parse', () => {
   const root = makeNode('Root', { x: 10, y: 20 }, { id: 'root', root: true })
   const child = makeNode('Child', { x: 210, y: 20 }, { id: 'child' })
