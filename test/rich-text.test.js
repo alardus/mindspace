@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeTextFormats, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
+import { formatShortcut, normalizeTextFormats, readEditorValue, textRuns, toggleTextFormat, trimRichText } from '../src/rich-text.js'
+
+const domText = (data) => ({ nodeType: 3, data })
+const domElement = (name, ...childNodes) => ({ nodeType: 1, nodeName: name.toUpperCase(), childNodes })
 
 test('format ranges validate, sort, deduplicate and merge the same style', () => {
   assert.deepEqual(normalizeTextFormats('A🙂BC', [
@@ -80,4 +83,56 @@ test('text runs combine crossing styles with link and search annotations', () =>
     { from: 2, to: 3, text: 'c', styles: ['bold'], href: 'https://example.com', match: true },
     { from: 3, to: 4, text: 's', styles: [], href: 'https://example.com', match: true },
   ])
+})
+
+test('editor DOM becomes plain text and supported formatting ranges', () => {
+  const root = domElement('div',
+    domElement('strong', domText('Bold '), domElement('em', domText('both'))),
+    domElement('br'),
+    domElement('s', domText('gone')),
+    domElement('b', domText('B')),
+    domElement('i', domText('I')),
+    domElement('strike', domText('S')),
+    domElement('del', domText('D')),
+  )
+
+  assert.deepEqual(readEditorValue(root), {
+    text: 'Bold both\ngoneBISD',
+    formats: [
+      { from: 0, to: 9, style: 'bold' },
+      { from: 5, to: 9, style: 'italic' },
+      { from: 10, to: 14, style: 'strike' },
+      { from: 14, to: 15, style: 'bold' },
+      { from: 15, to: 16, style: 'italic' },
+      { from: 16, to: 18, style: 'strike' },
+    ],
+  })
+})
+
+test('editor DOM after deletion and replacement keeps styles on the surviving characters', () => {
+  const root = domElement('div', domElement('strong', domText('ac')), domElement('em', domText('X')))
+
+  assert.deepEqual(readEditorValue(root), {
+    text: 'acX',
+    formats: [
+      { from: 0, to: 2, style: 'bold' },
+      { from: 2, to: 3, style: 'italic' },
+    ],
+  })
+})
+
+test('unsupported pasted markup contributes text but no stored markup or style', () => {
+  const unsafe = { ...domElement('span', domText('click')), onclick: 'steal()' }
+  const root = domElement('div', domText('Safe '), unsafe, domElement('script', domText(' alert(1)')))
+
+  assert.deepEqual(readEditorValue(root), { text: 'Safe click alert(1)', formats: [] })
+})
+
+test('format shortcuts recognize Mod-B, Mod-I and Mod-Shift-X only', () => {
+  assert.equal(formatShortcut({ code: 'KeyB', metaKey: true }), 'bold')
+  assert.equal(formatShortcut({ code: 'KeyI', ctrlKey: true }), 'italic')
+  assert.equal(formatShortcut({ code: 'KeyX', ctrlKey: true, shiftKey: true }), 'strike')
+  assert.equal(formatShortcut({ code: 'KeyX', ctrlKey: true }), null)
+  assert.equal(formatShortcut({ code: 'KeyB', metaKey: true, shiftKey: true }), null)
+  assert.equal(formatShortcut({ code: 'KeyI' }), null)
 })

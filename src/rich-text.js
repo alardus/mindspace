@@ -94,3 +94,45 @@ export function textRuns(text, formats, annotations = []) {
     }
   })
 }
+
+const TAG_STYLE = {
+  B: 'bold',
+  STRONG: 'bold',
+  I: 'italic',
+  EM: 'italic',
+  S: 'strike',
+  STRIKE: 'strike',
+  DEL: 'strike',
+}
+
+export function readEditorValue(root) {
+  let text = ''
+  const formats = []
+  const visit = (node, active = []) => {
+    if (node?.nodeType === 3) {
+      const value = String(node.data ?? '')
+      const from = text.length
+      text += value
+      for (const style of active) if (value) formats.push({ from, to: text.length, style })
+      return
+    }
+    const tag = String(node?.nodeName ?? '').toUpperCase()
+    if (tag === 'BR') {
+      text += '\n'
+      return
+    }
+    const style = TAG_STYLE[tag]
+    const next = style && !active.includes(style) ? [...active, style] : active
+    for (const child of node?.childNodes ?? []) visit(child, next)
+  }
+  visit(root)
+  return { text, formats: normalizeTextFormats(text, formats) }
+}
+
+export function formatShortcut(event) {
+  if (!(event?.metaKey || event?.ctrlKey) || event.altKey) return null
+  if (event.code === 'KeyB' && !event.shiftKey) return 'bold'
+  if (event.code === 'KeyI' && !event.shiftKey) return 'italic'
+  if (event.code === 'KeyX' && event.shiftKey) return 'strike'
+  return null
+}

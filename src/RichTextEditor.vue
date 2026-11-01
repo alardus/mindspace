@@ -1,0 +1,216 @@
+<script setup>
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, onUpdated, ref } from 'vue'
+import { formatShortcut, normalizeTextFormats, readEditorValue, textRuns } from './rich-text.js'
+
+const props = defineProps({
+  modelValue: { type: Object, required: true },
+  maxlength: { type: Number, default: Infinity },
+  multiline: Boolean,
+  name: { type: String, default: '' },
+  ariaLabel: { type: String, required: true },
+  placeholder: { type: String, default: '' },
+})
+const emit = defineEmits(['update:modelValue', 'activate', 'format-state', 'keydown', 'focus', 'blur'])
+const root = ref(null)
+const revision = ref(0)
+let savedSelection = null
+
+const RichRun = defineComponent({
+  props: { run: { type: Object, required: true } },
+  setup(runProps) {
+    return () => {
+      let content = runProps.run.text
+      if (runProps.run.styles.includes('strike')) content = h('s', content)
+      if (runProps.run.styles.includes('italic')) content = h('em', content)
+      if (runProps.run.styles.includes('bold')) content = h('strong', content)
+      return h('span', content)
+    }
+  },
+})
+
+const runs = computed(() => textRuns(props.modelValue?.text ?? '', props.modelValue?.formats))
+const children = (node) => [...(node?.childNodes ?? [])]
+const nodeLength = (node) => {
+  if (node?.nodeType === 3) return String(node.data ?? '').length
+  if (String(node?.nodeName ?? '').toUpperCase() === 'BR') return 1
+  return children(node).reduce((sum, child) => sum + nodeLength(child), 0)
+}
+
+function offsetAt(target, targetOffset) {
+  let offset = 0
+  let result = null
+  const visit = (node) => {
+    if (result !== null) return
+    if (node === target) {
+      if (node.nodeType === 3) result = offset + Math.min(targetOffset, nodeLength(node))
+      else result = offset + children(node).slice(0, targetOffset).reduce((sum, child) => sum + nodeLength(child), 0)
+      return
+    }
+    if (node.nodeType === 3 || String(node.nodeName ?? '').toUpperCase() === 'BR') offset += nodeLength(node)
+    else children(node).forEach(visit)
+  }
+  visit(root.value)
+  return result
+}
+
+function pointAt(wanted) {
+  let remaining = Math.max(0, wanted)
+  const seek = (parent) => {
+    const items = children(parent)
+    for (let index = 0; index < items.length; index += 1) {
+      const child = items[index]
+      const length = nodeLength(child)
+      if (remaining > length) {
+        remaining -= length
+        continue
+      }
+      if (child.nodeType === 3) return [child, Math.min(remaining, length)]
+      if (String(child.nodeName ?? '').toUpperCase() === 'BR') return [parent, remaining ? index + 1 : index]
+      return seek(child)
+    }
+    return [parent, items.length]
+  }
+  return seek(root.value)
+}
+
+function currentSelection() {
+  const selection = window.getSelection()
+  if (!selection?.rangeCount || !root.value?.contains(selection.anchorNode) || !root.value.contains(selection.focusNode)) return null
+  const anchor = offsetAt(selection.anchorNode, selection.anchorOffset)
+  const focus = offsetAt(selection.focusNode, selection.focusOffset)
+  return anchor === null || focus === null ? null : { from: Math.min(anchor, focus), to: Math.max(anchor, focus) }
+}
+
+function restoreSelection(range = savedSelection) {
+  if (!range || !root.value) return
+  const [startNode, startOffset] = pointAt(range.from)
+  const [endNode, endOffset] = pointAt(range.to)
+  const selection = window.getSelection()
+  const domRange = document.createRange()
+  domRange.setStart(startNode, startOffset)
+  domRange.setEnd(endNode, endOffset)
+  selection.removeAllRanges()
+  selection.addRange(domRange)
+}
+
+const commands = { bold: 'bold', italic: 'italic', strike: 'strikeThrough' }
+function activeStyles() {
+  if (document.activeElement !== root.value) return []
+  return Object.entries(commands).flatMap(([style, command]) => document.queryCommandState(command) ? [style] : [])
+}
+const reportState = () => emit('format-state', activeStyles())
+
+function sync() {
+  const selection = currentSelection()
+  const parsed = readEditorValue(root.value)
+  const text = parsed.text.slice(0, props.maxlength)
+  const formats = normalizeTextFormats(text, parsed.formats)
+  savedSelection = selection && { from: Math.min(selection.from, text.length), to: Math.min(selection.to, text.length) }
+  revision.value += 1
+  emit('update:modelValue', { text, formats })
+  nextTick(() => {
+    if (document.activeElement === root.value) restoreSelection()
+    reportState()
+  })
+}
+
+function focus() {
+  root.value?.focus()
+}
+
+function selectAll() {
+  focus()
+  savedSelection = { from: 0, to: props.modelValue?.text?.length ?? 0 }
+  restoreSelection()
+  reportState()
+}
+
+function setCaret(offset) {
+  focus()
+  savedSelection = { from: offset, to: offset }
+  restoreSelection()
+  reportState()
+}
+
+function insertText(value) {
+  focus()
+  restoreSelection()
+  const text = props.multiline ? value : String(value).replace(/\s*\r?\n\s*/g, ' ')
+  document.execCommand('insertText', false, text)
+  sync()
+}
+
+function toggle(style) {
+  const command = commands[style]
+  if (!command) return
+  focus()
+  restoreSelection()
+  const before = currentSelection()
+  document.execCommand(command)
+  savedSelection = currentSelection()
+  if (before?.from === before?.to) reportState()
+  else sync()
+}
+
+const controller = { focus, selectAll, setCaret, insertText, toggle, activeStyles }
+
+function onFocus(event) {
+  savedSelection = currentSelection() ?? { from: 0, to: 0 }
+  emit('activate', controller)
+  emit('focus', event)
+  reportState()
+}
+
+function onBlur(event) {
+  emit('blur', event)
+  emit('format-state', [])
+}
+
+function onKeydown(event) {
+  const style = formatShortcut(event)
+  if (style) {
+    event.preventDefault()
+    toggle(style)
+    return
+  }
+  emit('keydown', event)
+}
+
+function onPaste(event) {
+  event.preventDefault()
+  insertText(event.clipboardData?.getData('text/plain') ?? '')
+}
+
+function onSelectionChange() {
+  const selection = currentSelection()
+  if (!selection) return
+  savedSelection = selection
+  reportState()
+}
+
+onMounted(() => document.addEventListener('selectionchange', onSelectionChange))
+onBeforeUnmount(() => document.removeEventListener('selectionchange', onSelectionChange))
+onUpdated(() => {
+  if (document.activeElement === root.value && savedSelection) restoreSelection()
+})
+
+defineExpose(controller)
+</script>
+
+<template>
+  <div
+    ref="root"
+    contenteditable="true"
+    role="textbox"
+    :name="name"
+    :aria-label="ariaLabel"
+    :aria-multiline="multiline ? 'true' : 'false'"
+    :data-placeholder="placeholder"
+    spellcheck="true"
+    @input="sync"
+    @focus="onFocus"
+    @blur="onBlur"
+    @keydown="onKeydown"
+    @paste="onPaste"
+  ><RichRun v-for="run in runs" :key="`${revision}:${run.from}:${run.to}`" :run="run" /></div>
+</template>
