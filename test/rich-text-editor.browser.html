@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Rich text editor browser regressions</title>
+<button id="run">Run editor regressions</button>
+<pre id="results" aria-live="polite">Ready</pre>
+<div id="fixture"></div>
+<script type="module">
+import { createApp, h, nextTick, ref } from 'vue'
+import RichTextEditor from '/src/RichTextEditor.vue'
+import { readEditorValue } from '/src/rich-text.js'
+import '/src/style.css'
+
+const same = (actual, expected) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
+}
+const shortcut = (root, code) => root.dispatchEvent(new KeyboardEvent('keydown', { code, ctrlKey: true, shiftKey: code === 'KeyX', bubbles: true, cancelable: true }))
+
+document.querySelector('#run').onclick = async () => {
+  const results = []
+  for (const [name, initial, check] of [
+    ['plain root title bold survives saving and remounting', { text: 'Root title', formats: [] }, async ({ root, editor, value, styles, remount }) => {
+      editor().selectAll()
+      await nextTick()
+      same(styles.value, [])
+      shortcut(root(), 'KeyB')
+      await nextTick()
+      same(value.value, { text: 'Root title', formats: [{ from: 0, to: 10, style: 'bold' }] })
+      await remount()
+      same(readEditorValue(root()), { text: 'Root title', formats: [{ from: 0, to: 10, style: 'bold' }] })
+    }],
+    ['italic text permits a visible slant for the upright-only app font', {
+      text: 'Italic',
+      formats: [{ from: 0, to: 6, style: 'italic' }],
+    }, async ({ root }) => {
+      const style = getComputedStyle(root().querySelector('em'))
+      same(style.fontStyle, 'italic')
+      same(style.fontSynthesis, 'style')
+    }],
+    ...[['bold', 'KeyB'], ['italic', 'KeyI'], ['strike', 'KeyX']].flatMap(([style, code]) => [0, 3].map((from) => [
+      `mixed ${style} selection beginning ${from ? 'plain' : 'styled'} applies style and undoes in one step`,
+      { text: 'abcd', formats: [{ from, to: from + 1, style }] },
+      async ({ root, editor, value, styles }) => {
+        editor().selectAll()
+        await nextTick()
+        shortcut(root(), code)
+        await nextTick()
+        same(value.value, { text: 'abcd', formats: [{ from: 0, to: 4, style }] })
+        same(window.getSelection().toString(), 'abcd')
+        document.execCommand('undo')
+        await nextTick()
+        same(value.value, { text: 'abcd', formats: [{ from, to: from + 1, style }] })
+        editor().selectAll()
+        same(styles.value, [])
+      },
+    ])),
+    ['partial selection removes a fully covered style and preserves other ranges, emoji and newlines', {
+      text: 'A🙂\nBC',
+      formats: [{ from: 0, to: 6, style: 'bold' }, { from: 4, to: 6, style: 'italic' }],
+    }, async ({ root, editor, value, styles }) => {
+      editor().setCaret(1)
+      const selection = window.getSelection()
+      const text = root().querySelector('strong').firstChild
+      selection.extend(text, 3)
+      document.dispatchEvent(new Event('selectionchange'))
+      same(styles.value, ['bold'])
+      shortcut(root(), 'KeyB')
+      await nextTick()
+      same(value.value, {
+        text: 'A🙂\nBC',
+        formats: [
+          { from: 0, to: 1, style: 'bold' },
+          { from: 3, to: 6, style: 'bold' },
+          { from: 4, to: 6, style: 'italic' },
+        ],
+      })
+      same(window.getSelection().toString(), '🙂')
+      document.execCommand('undo')
+      await nextTick()
+      same(value.value, {
+        text: 'A🙂\nBC',
+        formats: [{ from: 0, to: 6, style: 'bold' }, { from: 4, to: 6, style: 'italic' }],
+      })
+    }],
+    ['collapsed caret typing retains its toggled style and external paste stays plain', { text: 'abcd', formats: [] }, async ({ root, editor, value }) => {
+      editor().setCaret(2)
+      shortcut(root(), 'KeyB')
+      document.execCommand('insertText', false, 'X')
+      await nextTick()
+      same(value.value, { text: 'abXcd', formats: [{ from: 2, to: 3, style: 'bold' }] })
+      editor().selectAll()
+      const clipboardData = new DataTransfer()
+      clipboardData.setData('text/plain', '<literal>🙂')
+      clipboardData.setData('text/html', '<img src=x onerror=alert(1)><strong>Wrong</strong>')
+      root().dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }))
+      await nextTick()
+      same(value.value, { text: '<literal>🙂', formats: [] })
+      same(root().querySelectorAll('img, script').length, 0)
+    }],
+  ]) {
+    let app
+    const value = ref(structuredClone(initial))
+    const styles = ref([])
+    const editor = ref(null)
+    const mount = async () => {
+      app = createApp({ render: () => h('div', { class: name.startsWith('plain root') ? 'mind-node root' : 'mind-node' }, [
+        h('div', { class: 'node-editor' }, [h(RichTextEditor, {
+          ref: editor,
+          class: 'node-title',
+          ariaLabel: name,
+          multiline: true,
+          modelValue: value.value,
+          'onUpdate:modelValue': (next) => { value.value = next },
+          'onFormat-state': (next) => { styles.value = next },
+        })]),
+      ]) })
+      app.mount('#fixture')
+      await nextTick()
+    }
+    try {
+      await mount()
+      await check({
+        root: () => document.querySelector('#fixture [contenteditable]'),
+        editor: () => editor.value,
+        value,
+        styles,
+        remount: async () => { app.unmount(); await mount() },
+      })
+      results.push({ name, pass: true })
+    } catch (error) {
+      results.push({ name, pass: false, error: error.message })
+    } finally {
+      app?.unmount()
+    }
+  }
+  document.querySelector('#results').textContent = JSON.stringify(results, null, 2)
+}
+</script>

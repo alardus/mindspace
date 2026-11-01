@@ -73,6 +73,16 @@ test('help groups cover every registry entry in group order', () => {
     .map((item) => item.id), ['mapNavigate', 'mapOpen', 'mapRename', 'mapDuplicate', 'mapDelete', 'mapMenu'])
 })
 
+test('editing help lists bold, italic and strikethrough shortcuts', () => {
+  const items = shortcutGroups(false).find((group) => group.title === 'Editing').items
+  assert.deepEqual(items.filter((item) => ['bold', 'italic', 'strike'].includes(item.id))
+    .map((item) => [item.id, item.label, item.keys]), [
+    ['bold', 'Bold', ['Ctrl', 'B']],
+    ['italic', 'Italic', ['Ctrl', 'I']],
+    ['strike', 'Strikethrough', ['Shift', 'Ctrl', 'X']],
+  ])
+})
+
 test('line break replaces the selection and puts the caret after the new line', () => {
   const insertLineBreak = shortcuts.insertLineBreak ?? (() => null)
 

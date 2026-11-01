@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
 import { BaseEdge, Handle, Position, VueFlow, getRectOfNodes, getTransformForBounds, useVueFlow } from '@vue-flow/core'
 import {
   DEFAULT_SIZE,
@@ -22,14 +22,14 @@ import {
   descendantsOf,
   freeObjectIdsInRect,
   freeTextHeight,
-  highlightParts,
+  highlightRanges,
   insertTreeEdgeAfter,
   layoutVerticalGap,
   layoutNodes,
   linkAnchor,
   linkAnchorOffsets,
   linkFrame,
-  linkParts,
+  linkRanges,
   linkPath,
   linkSides,
   makeEdge,
@@ -96,6 +96,9 @@ import {
 } from './clipboard.js'
 import Logo from './Logo.vue'
 import MarkIcon from './MarkIcon.vue'
+import RichText from './RichText.vue'
+import RichTextEditor from './RichTextEditor.vue'
+import { trimRichText } from './rich-text.js'
 import { IS_MAC, MULTI_SELECT_KEY, PAN_KEY, findShortcut, hasLinkMod, hasMod, insertLineBreak, keyLabel, selectAllCanvasObjects, shortcutGroups, shortcutKeys, typingTarget } from './shortcuts.js'
 
 const SEEN_VERSION_KEY = 'mindspace-seen-version'
@@ -148,7 +151,16 @@ const marksOpen = ref(false)
 const marksWrap = ref(null)
 const hoveredMark = ref(null)
 const editingId = ref(null)
-const editDraft = ref({ label: '', note: '' })
+const editDraft = ref({ label: '', labelFormats: [], note: '', noteFormats: [] })
+const nodeTitleEditor = ref(null)
+const nodeNoteEditor = ref(null)
+const activeRichEditor = shallowRef(null)
+const activeTextStyles = ref([])
+const TEXT_FORMAT_BUTTONS = [
+  { style: 'bold', label: 'Bold', glyph: 'B' },
+  { style: 'italic', label: 'Italic', glyph: 'I' },
+  { style: 'strike', label: 'Strikethrough', glyph: 'S' },
+]
 const dropTargetId = ref(null)
 const contextMenu = ref(null)
 const fileInput = ref(null)
@@ -464,6 +476,8 @@ function cleanMap() {
           naturalHeight: node.data.image.naturalHeight,
         } } : {}),
         ...(node.data.marks?.length ? { marks: [...node.data.marks] } : {}),
+        ...(node.data.labelFormats?.length ? { labelFormats: node.data.labelFormats.map((range) => ({ ...range })) } : {}),
+        ...(node.data.noteFormats?.length ? { noteFormats: node.data.noteFormats.map((range) => ({ ...range })) } : {}),
       },
     })),
     edges: edges.value.map((edge) => ({
@@ -505,6 +519,8 @@ function openMap(map) {
   freeTexts.value = normalized.freeTexts ?? []
   links.value = normalized.links ?? []
   editingId.value = null
+  activeRichEditor.value = null
+  activeTextStyles.value = []
   editAnchor = null
   editingTextId.value = null
   selectedMarkId.value = selectedLinkId.value = selectedTextId.value = null
@@ -797,27 +813,53 @@ function focusEditor(id, initialText = null) {
   if (editAnchor) measuredNodeWidths.set(id, editAnchor.width)
   if (Number.isFinite(height)) measuredNodeHeights.set(id, height)
   editingId.value = id
-  editDraft.value = { label: initialText ?? node?.data.label ?? '', note: node?.data.note ?? '' }
+  editDraft.value = {
+    label: initialText ?? node?.data.label ?? '',
+    labelFormats: initialText === null ? (node?.data.labelFormats ?? []).map((range) => ({ ...range })) : [],
+    note: node?.data.note ?? '',
+    noteFormats: (node?.data.noteFormats ?? []).map((range) => ({ ...range })),
+  }
   editStart = snapshot()
   nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => {
-    const editor = document.querySelector(`[data-editor="${CSS.escape(id)}"]`)
-    editor?.focus()
-    if (initialText === null) editor?.select()
-    else {
-      editor?.setSelectionRange(initialText.length, initialText.length)
-    }
+    nodeTitleEditor.value?.focus()
+    if (initialText === null) nodeTitleEditor.value?.selectAll()
+    else nodeTitleEditor.value?.setCaret(initialText.length)
   })))
 }
 
 function focusNoteEditor(id) {
-  nextTick(() => document.querySelector(`[data-note-editor="${CSS.escape(id)}"]`)?.focus())
+  nextTick(() => nodeNoteEditor.value?.focus())
 }
 
-function insertEditorLine(event) {
-  const editor = event.currentTarget
-  const next = insertLineBreak(editDraft.value.label, editor.selectionStart, editor.selectionEnd, editor.maxLength)
-  editDraft.value.label = next.text
-  nextTick(() => editor.setSelectionRange(next.caret, next.caret))
+function insertEditorLine() {
+  nodeTitleEditor.value?.insertText('\n')
+}
+
+function updateEditRichText(field, value) {
+  editDraft.value[field] = value.text
+  editDraft.value[`${field}Formats`] = value.formats
+}
+
+function assignRichText(data, field, value) {
+  data[field] = value.text
+  const formats = value.formats.map((range) => ({ ...range }))
+  if (formats.length) data[`${field}Formats`] = formats
+  else delete data[`${field}Formats`]
+}
+
+const richTextValue = (data, field) => ({ text: data[field] ?? '', formats: data[`${field}Formats`] ?? [] })
+
+function activateRichEditor(controller) {
+  activeRichEditor.value = controller
+  activeTextStyles.value = controller.activeStyles()
+}
+
+function updateActiveTextStyles(styles) {
+  activeTextStyles.value = styles
+}
+
+function toggleActiveTextStyle(style) {
+  activeRichEditor.value?.toggle(style)
 }
 
 function onEditorFocusOut(event) {
@@ -830,10 +872,11 @@ function finishEditing(save = true) {
   const id = editingId.value
   const documentId = activeId.value
   const node = nodes.value.find((item) => item.id === id)
-  const label = editDraft.value.label.trim()
-  if (save && node && label) {
-    node.data.label = label.slice(0, MAX_LABEL_LENGTH)
-    node.data.note = editDraft.value.note.trim().slice(0, 200)
+  const label = trimRichText(editDraft.value.label, editDraft.value.labelFormats, MAX_LABEL_LENGTH)
+  const note = trimRichText(editDraft.value.note, editDraft.value.noteFormats, 200)
+  if (save && node && label.text) {
+    assignRichText(node.data, 'label', label)
+    assignRichText(node.data, 'note', note)
   }
   if (node && editAnchor?.id === node.id) {
     const width = restoreNodeEdit(node, editAnchor)
@@ -1088,9 +1131,16 @@ function beginPanelEdit() {
 }
 
 function endPanelEdit(node) {
-  if (node && !node.data.label.trim()) node.data.label = 'Untitled'
+  if (node && !node.data.label.trim()) {
+    node.data.label = 'Untitled'
+    delete node.data.labelFormats
+  }
   record(panelEditStart)
   panelEditStart = null
+}
+
+function updatePanelRichText(node, field, value) {
+  assignRichText(node.data, field, value)
 }
 
 function onPanelKeydown(event) {
@@ -1250,11 +1300,12 @@ watch([searchPath, searchCurrentId, searchTerm], () => {
   }
 })
 const searchState = (id) => searchMarks.get(id)?.state
-const searchParts = (id, text) => {
+const displayAnnotations = (id, text) => {
+  const annotations = linkRanges(text)
   const mark = searchMarks.get(id)
-  return mark && mark.state !== 'path' ? highlightParts(text, mark.term) : [{ text, match: false }]
+  if (mark && mark.state !== 'path') annotations.push(...highlightRanges(text, mark.term))
+  return annotations
 }
-const displayParts = (id, text) => linkParts(text).map((part) => ({ ...part, search: searchParts(id, part.text) }))
 const onTextLinkClick = (event) => {
   if (!hasMod(event)) event.preventDefault()
 }
@@ -3628,28 +3679,36 @@ onBeforeUnmount(() => {
               >
                 <div class="node-head">
                   <MarkIcon v-for="mark in data.marks" :id="mark" :key="mark" />
-                  <textarea
-                    v-model="editDraft.label"
+                  <RichTextEditor
+                    ref="nodeTitleEditor"
+                    :model-value="{ text: editDraft.label, formats: editDraft.labelFormats }"
                     :data-editor="id"
                     class="node-title"
                     name="node-text"
-                    rows="1"
                     :maxlength="MAX_LABEL_LENGTH"
+                    :multiline="true"
                     aria-label="Node title"
+                    @update:model-value="updateEditRichText('label', $event)"
+                    @activate="activateRichEditor"
+                    @format-state="updateActiveTextStyles"
                     @keydown.enter.exact.prevent="finishEditing()"
-                    @keydown.shift.enter.prevent="insertEditorLine($event)"
+                    @keydown.shift.enter.prevent="insertEditorLine"
                     @keydown.tab.exact.prevent="focusNoteEditor(id)"
                     @keydown.esc.prevent="finishEditing(false)"
-                  ></textarea>
+                  />
                 </div>
-                <input
-                  v-model="editDraft.note"
+                <RichTextEditor
+                  ref="nodeNoteEditor"
+                  :model-value="{ text: editDraft.note, formats: editDraft.noteFormats }"
                   :data-note-editor="id"
                   class="node-note"
                   name="node-note"
-                  maxlength="200"
+                  :maxlength="200"
                   placeholder="Details"
                   aria-label="Second line"
+                  @update:model-value="updateEditRichText('note', $event)"
+                  @activate="activateRichEditor"
+                  @format-state="updateActiveTextStyles"
                   @keydown.enter.prevent="finishEditing()"
                   @keydown.tab.exact.prevent="finishEditing()"
                   @keydown.esc.prevent="finishEditing(false)"
@@ -3658,29 +3717,19 @@ onBeforeUnmount(() => {
               <template v-else>
                 <div v-if="data.label" class="node-head">
                   <MarkIcon v-for="mark in data.marks" :id="mark" :key="mark" :data-mark="mark" />
-                  <span class="node-title"><component
-                    :is="part.href ? 'a' : 'span'"
-                    v-for="(part, index) in displayParts(id, blockPreview(data.label))"
-                    :key="index"
-                    :class="{ 'node-link': part.href, nodrag: part.href }"
-                    :href="part.href"
-                    :target="part.href ? '_blank' : undefined"
-                    :rel="part.href ? 'noopener' : undefined"
-                    :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
-                    @click="part.href && onTextLinkClick($event)"
-                  ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                  <span class="node-title"><RichText
+                    :text="blockPreview(data.label)"
+                    :formats="data.labelFormats"
+                    :annotations="displayAnnotations(id, blockPreview(data.label))"
+                    @link-click="onTextLinkClick"
+                  /></span>
                 </div>
-                <span v-if="data.note" class="node-note"><component
-                  :is="part.href ? 'a' : 'span'"
-                  v-for="(part, index) in displayParts(id, data.note)"
-                  :key="index"
-                  :class="{ 'node-link': part.href, nodrag: part.href }"
-                  :href="part.href"
-                  :target="part.href ? '_blank' : undefined"
-                  :rel="part.href ? 'noopener' : undefined"
-                  :title="part.href ? `${keyLabel('Mod')}+click to open` : undefined"
-                  @click="part.href && onTextLinkClick($event)"
-                ><template v-for="(match, matchIndex) in part.search" :key="matchIndex"><mark v-if="match.match">{{ match.text }}</mark><template v-else>{{ match.text }}</template></template></component></span>
+                <span v-if="data.note" class="node-note"><RichText
+                  :text="data.note"
+                  :formats="data.noteFormats"
+                  :annotations="displayAnnotations(id, data.note)"
+                  @link-click="onTextLinkClick"
+                /></span>
               </template>
               <div
                 v-if="!data.root || hasChildren(id)"
@@ -4218,26 +4267,44 @@ onBeforeUnmount(() => {
 
             <section v-if="primaryNode.data.label" class="panel-section">
               <h3>Text</h3>
-              <input
+              <div class="formatting-toolbar" role="toolbar" aria-label="Text formatting">
+                <button
+                  v-for="format in TEXT_FORMAT_BUTTONS"
+                  :key="format.style"
+                  type="button"
+                  :class="[`format-${format.style}`, { active: activeTextStyles.includes(format.style) }]"
+                  :aria-label="format.label"
+                  :title="`${format.label} (${shortcutKeys(format.style).join('+')})`"
+                  :aria-pressed="activeTextStyles.includes(format.style)"
+                  :disabled="!activeRichEditor"
+                  @pointerdown.prevent
+                  @click="toggleActiveTextStyle(format.style)"
+                >{{ format.glyph }}</button>
+              </div>
+              <RichTextEditor
                 class="panel-input title-input"
-                :value="primaryNode.data.label"
+                :model-value="richTextValue(primaryNode.data, 'label')"
                 name="panel-node-title"
                 aria-label="Title"
                 :maxlength="MAX_LABEL_LENGTH"
                 @focus="beginPanelEdit"
-                @input="primaryNode.data.label = $event.target.value"
+                @update:model-value="updatePanelRichText(primaryNode, 'label', $event)"
+                @activate="activateRichEditor"
+                @format-state="updateActiveTextStyles"
                 @blur="endPanelEdit(primaryNode)"
                 @keydown="onPanelKeydown"
               />
-              <input
+              <RichTextEditor
                 class="panel-input note-input"
-                :value="primaryNode.data.note"
+                :model-value="richTextValue(primaryNode.data, 'note')"
                 name="panel-node-note"
                 aria-label="Second line"
                 placeholder="Second line: price, note"
-                maxlength="200"
+                :maxlength="200"
                 @focus="beginPanelEdit"
-                @input="primaryNode.data.note = $event.target.value"
+                @update:model-value="updatePanelRichText(primaryNode, 'note', $event)"
+                @activate="activateRichEditor"
+                @format-state="updateActiveTextStyles"
                 @blur="endPanelEdit()"
                 @keydown="onPanelKeydown"
               />

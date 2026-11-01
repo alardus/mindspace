@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as mapModel from '../src/model.js'
-import { COLORS, DEFAULT_SIZE, highlightParts, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
+import { COLORS, DEFAULT_SIZE, highlightParts, highlightRanges, linkRanges, nextMatch, normalizeSearch, searchOrder, PALETTES, descendantsOf, insertTreeEdgeAfter, layoutVerticalGap, nodeInDirection, nodeStyle, normalizeSettings, plural, recolorForPalette, layoutNodes, makeEdge, makeNode, normalizeLibrary, normalizeMap, pluralNodes, relativeTime, shiftNodesBelow, starterMap, toOpml } from '../src/model.js'
 
 const parseMarkdown = mapModel.parseMarkdown ?? (() => ({ title: '', nodes: [], edges: [] }))
 const toMarkdown = mapModel.toMarkdown ?? (() => '')
@@ -33,13 +33,70 @@ test('block preview hides text after 1000 characters without discarding it', () 
 })
 
 test('block text separates web links from surrounding punctuation', () => {
-  assert.deepEqual(mapModel.linkParts?.('Docs: https://example.com/guide, mirror: http://example.org.'), [
+  const text = 'Docs: https://example.com/guide, mirror: http://example.org.'
+  assert.deepEqual(linkRanges(text), [
+    { from: 6, to: 31, href: 'https://example.com/guide' },
+    { from: 41, to: 59, href: 'http://example.org' },
+  ])
+  assert.deepEqual(mapModel.linkParts?.(text), [
     { text: 'Docs: ' },
     { text: 'https://example.com/guide', href: 'https://example.com/guide' },
     { text: ', mirror: ' },
     { text: 'http://example.org', href: 'http://example.org' },
     { text: '.' },
   ])
+})
+
+test('formatted titles and Details survive map normalization without changing plain text', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: [
+      {
+        id: 'formatted',
+        data: {
+          label: 'Ship carefully',
+          labelFormats: [{ from: 0, to: 4, style: 'bold' }],
+          note: 'Review Friday',
+          noteFormats: [{ from: 7, to: 13, style: 'strike' }],
+        },
+      },
+      { id: 'plain', data: { label: 'Plain', note: 'Details' } },
+    ],
+    edges: [],
+  })
+
+  assert.equal(map.version, 2)
+  assert.equal(map.nodes[0].data.label, 'Ship carefully')
+  assert.equal(map.nodes[0].data.note, 'Review Friday')
+  assert.deepEqual(map.nodes[0].data.labelFormats, [{ from: 0, to: 4, style: 'bold' }])
+  assert.deepEqual(map.nodes[0].data.noteFormats, [{ from: 7, to: 13, style: 'strike' }])
+  assert.equal('labelFormats' in map.nodes[1].data, false)
+  assert.equal('noteFormats' in map.nodes[1].data, false)
+  assert.deepEqual([map.nodes[1].data.label, map.nodes[1].data.note], ['Plain', 'Details'])
+})
+
+test('malformed formatting is dropped without dropping its block', () => {
+  const map = normalizeMap({
+    version: 2,
+    nodes: [{
+      id: 'safe',
+      data: {
+        label: 'A🙂B',
+        labelFormats: [
+          { from: 2, to: 4, style: 'bold' },
+          { from: 0, to: 1, style: 'script' },
+        ],
+        note: 'Still here',
+        noteFormats: 'not-an-array',
+      },
+    }],
+    edges: [],
+  })
+
+  assert.equal(map.nodes[0].data.label, 'A🙂B')
+  assert.equal(map.nodes[0].data.note, 'Still here')
+  assert.equal('labelFormats' in map.nodes[0].data, false)
+  assert.equal('noteFormats' in map.nodes[0].data, false)
 })
 
 test('attachment proximity follows the cursor beside any part of a block', () => {
@@ -463,6 +520,67 @@ Other → Project (“blocks”)
   assert.deepEqual(parseMarkdown(toMarkdown(map)).nodes.map((node) => node.data.label), ['Project', '[Image]', 'Other'])
 })
 
+test('Markdown export and import preserve formatted block titles and Details', () => {
+  const original = normalizeMap({
+    title: 'Rich map',
+    nodes: [{
+      id: 'formatted',
+      data: {
+        label: 'Crossing *literal*',
+        labelFormats: [
+          { from: 0, to: 6, style: 'bold' },
+          { from: 3, to: 8, style: 'italic' },
+        ],
+        note: 'Review Friday',
+        noteFormats: [
+          { from: 0, to: 10, style: 'bold' },
+          { from: 7, to: 13, style: 'strike' },
+        ],
+      },
+    }],
+    edges: [],
+  })
+
+  const markdown = toMarkdown(original)
+  const imported = parseMarkdown(markdown)
+  assert.match(markdown, /\\\*literal\\\*/)
+  assert.deepEqual(imported.nodes[0].data, original.nodes[0].data)
+
+  const withHeading = parseMarkdown(String.raw`# Rich map
+
+## **Heading** \*literal\*
+- Plain
+  > *Review* and ~~Friday~~
+`)
+  assert.equal(withHeading.nodes[0].data.label, 'Heading *literal*')
+  assert.deepEqual(withHeading.nodes[0].data.labelFormats, [{ from: 0, to: 7, style: 'bold' }])
+  assert.equal(withHeading.nodes[1].data.note, 'Review and Friday')
+  assert.deepEqual(withHeading.nodes[1].data.noteFormats, [
+    { from: 0, to: 6, style: 'italic' },
+    { from: 11, to: 17, style: 'strike' },
+  ])
+})
+
+test('OPML remains plain text', () => {
+  const map = normalizeMap({
+    title: 'Plain interchange',
+    nodes: [{
+      id: 'formatted',
+      data: {
+        label: 'Bold',
+        labelFormats: [{ from: 0, to: 4, style: 'bold' }],
+        note: 'Gone',
+        noteFormats: [{ from: 0, to: 4, style: 'strike' }],
+      },
+    }],
+    edges: [],
+  })
+
+  const opml = toOpml(map)
+  assert.match(opml, /<outline text="Bold" _note="Gone"\/>/)
+  assert.doesNotMatch(opml, /\*\*|~~/)
+})
+
 test('Markdown round-trip preserves notes that look like structure', () => {
   const notes = ['# status', '- detail', '* detail', '+ detail', '1. step', '2) step', '```js', '~~~', '\\# literal', '1\\. literal', '> quote']
   const map = normalizeMap({
@@ -636,6 +754,10 @@ test('map search order, wrap-around and highlighting', () => {
 
   assert.deepEqual(highlightParts('Ёлка и ёлка', 'елка'), [
     { text: 'Ёлка', match: true }, { text: ' и ', match: false }, { text: 'ёлка', match: true },
+  ])
+  assert.deepEqual(highlightRanges('Ёлка и ёлка', 'елка'), [
+    { from: 0, to: 4, match: true },
+    { from: 7, to: 11, match: true },
   ])
   assert.equal(highlightParts('aaa', 'a').length, 3)
   assert.ok(highlightParts('abc', 'b').every((part) => part.text))

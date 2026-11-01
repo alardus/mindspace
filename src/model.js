@@ -1,3 +1,5 @@
+import { normalizeTextFormats, parseInlineMarkdown, toInlineMarkdown, trimRichText } from './rich-text.js'
+
 export const STORAGE_KEY = 'mindspace-map-v1'
 export const LIBRARY_STORAGE_KEY = 'mindspace-library-v1'
 export const MAX_LABEL_LENGTH = 10_000
@@ -6,15 +8,23 @@ export const blockPreview = (text) => {
   return symbols.length > 1000 ? `${symbols.slice(0, 1000).join('')}...` : text
 }
 
-export function linkParts(text) {
-  const parts = []
-  let from = 0
+export function linkRanges(text) {
+  const ranges = []
   for (const match of text.matchAll(/https?:\/\/[^\s<]+/giu)) {
     const href = match[0].replace(/[),.;:!?\]}'"’”]+$/u, '')
     if (!URL.canParse(href)) continue
-    if (match.index > from) parts.push({ text: text.slice(from, match.index) })
-    parts.push({ text: href, href })
-    from = match.index + href.length
+    ranges.push({ from: match.index, to: match.index + href.length, href })
+  }
+  return ranges
+}
+
+export function linkParts(text) {
+  const parts = []
+  let from = 0
+  for (const range of linkRanges(text)) {
+    if (range.from > from) parts.push({ text: text.slice(from, range.from) })
+    parts.push({ text: text.slice(range.from, range.to), href: range.href })
+    from = range.to
   }
   if (from < text.length) parts.push({ text: text.slice(from) })
   return parts
@@ -215,13 +225,14 @@ export function normalizeFreeTexts(input) {
 }
 
 export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
+  const note = typeof options.note === 'string' ? options.note.slice(0, 200) : ''
   const node = {
     id: options.id ?? uid(),
     type: 'mind',
     position,
     data: {
       label,
-      note: typeof options.note === 'string' ? options.note.slice(0, 200) : '',
+      note,
       color: normalizeColor(options.color),
       style: NODE_STYLES.includes(options.style) ? options.style : '',
       manualColor: Boolean(options.manualColor),
@@ -234,6 +245,10 @@ export function makeNode(label, position = { x: 0, y: 0 }, options = {}) {
   if (image) node.data.image = image
   const marks = normalizeMarks(options.marks)
   if (marks.length) node.data.marks = marks
+  const labelFormats = normalizeTextFormats(label, options.labelFormats)
+  if (labelFormats.length) node.data.labelFormats = labelFormats
+  const noteFormats = normalizeTextFormats(note, options.noteFormats)
+  if (noteFormats.length) node.data.noteFormats = noteFormats
   return node
 }
 
@@ -1024,13 +1039,14 @@ export function toMarkdown(map) {
   const byId = new Map(map.nodes.map((node) => [node.id, node]))
   const visited = new Set()
   const clean = (value) => String(value ?? '').replace(/\s*\n\s*/g, ' ').trim()
+  const inline = (data, field) => clean(toInlineMarkdown(data[field] ?? '', data[`${field}Formats`]))
   const item = (id, depth) => {
     const node = byId.get(id)
     if (!node || visited.has(id)) return ''
     visited.add(id)
     const pad = '  '.repeat(depth)
-    const label = markPrefix(node) + (clean(node.data.label) || (node.data.image ? '[Image]' : 'Untitled'))
-    const note = clean(node.data.note)
+    const label = markPrefix(node) + (inline(node.data, 'label') || (node.data.image ? '[Image]' : 'Untitled'))
+    const note = inline(node.data, 'note')
     return `${pad}- ${label}\n${note ? `${pad}  > ${note}\n` : ''}${(children.get(id) ?? []).map((child) => item(child, depth + 1)).join('')}`
   }
   const body = map.nodes.filter((node) => !childIds.has(node.id)).map((node) => item(node.id, 0)).join('')
@@ -1104,16 +1120,33 @@ export function parseMarkdown(text, fallbackTitle = 'Untitled') {
   let activeHeading = null
   let fence = null
   let rootIndex = 0
-  const add = (label, parent = null) => {
+  const add = (source, parent = null) => {
     if (nodes.length >= 5000) throw new Error('The Markdown file has more than 5000 nodes')
-    const node = makeNode(label.trim().slice(0, MAX_LABEL_LENGTH), undefined, {
+    const label = parseInlineMarkdown(source)
+    const value = trimRichText(label.text, label.formats, MAX_LABEL_LENGTH)
+    const node = makeNode(value.text, undefined, {
       color: parent?.data.color ?? branchColor(rootIndex++),
+      labelFormats: value.formats,
     })
     nodes.push(node)
     if (parent) edges.push(makeEdge(parent.id, node.id))
     return node
   }
   const indentOf = (value) => value.replaceAll('\t', '    ').length
+  const appendNote = (node, source) => {
+    const parsed = parseInlineMarkdown(source)
+    const separator = node.data.note ? ' ' : ''
+    const value = trimRichText(parsed.text, parsed.formats, 200 - node.data.note.length - separator.length)
+    if (!value.text) return
+    const offset = node.data.note.length + separator.length
+    node.data.note += separator + value.text
+    const formats = [...(node.data.noteFormats ?? []), ...value.formats.map((range) => ({
+      from: range.from + offset,
+      to: range.to + offset,
+      style: range.style,
+    }))]
+    if (formats.length) node.data.noteFormats = formats
+  }
 
   for (const line of String(text).replace(/^\uFEFF/, '').replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')) {
     const closingFence = line.match(/^ {0,3}(`+|~+)[\t ]*$/)
@@ -1162,7 +1195,7 @@ export function parseMarkdown(text, fallbackTitle = 'Untitled') {
     const owner = list.findLast((entry) => entry.indent < indentOf(leading))
     if (owner && line.trim()) {
       const note = line.trim().replace(/^>[\t ]/, '')
-      owner.node.data.note = `${owner.node.data.note} ${note}`.trim().slice(0, 200)
+      appendNote(owner.node, note)
     }
   }
 
@@ -1251,16 +1284,28 @@ export function nextMatch(order, matches, anchorId) {
   return matches.find((id) => position.get(id) > from) ?? matches[0] ?? null
 }
 
-// Splits text into plain and matched parts; no empty parts.
-export function highlightParts(text, term) {
+export function highlightRanges(text, term) {
   const haystack = normalizeSearch(text)
-  if (!term || haystack.length !== text.length) return [{ text, match: false }]
-  const parts = []
+  if (!term || haystack.length !== text.length) return []
+  const ranges = []
   let from = 0
   for (let at = haystack.indexOf(term); at >= 0; at = haystack.indexOf(term, from)) {
-    if (at > from) parts.push({ text: text.slice(from, at), match: false })
     from = at + term.length
-    parts.push({ text: text.slice(at, from), match: true })
+    ranges.push({ from: at, to: from, match: true })
+  }
+  return ranges
+}
+
+// Splits text into plain and matched parts; no empty parts.
+export function highlightParts(text, term) {
+  const ranges = highlightRanges(text, term)
+  if (!ranges.length) return [{ text, match: false }]
+  const parts = []
+  let from = 0
+  for (const range of ranges) {
+    if (range.from > from) parts.push({ text: text.slice(from, range.from), match: false })
+    parts.push({ text: text.slice(range.from, range.to), match: true })
+    from = range.to
   }
   if (from < text.length) parts.push({ text: text.slice(from), match: false })
   return parts

@@ -52,6 +52,8 @@ const cleanNode = (node) => ({
     side: node.data.side,
     ...(node.data.image ? { image: { ...node.data.image } } : {}),
     ...(node.data.marks?.length ? { marks: [...node.data.marks] } : {}),
+    ...(node.data.labelFormats?.length ? { labelFormats: node.data.labelFormats.map((range) => ({ ...range })) } : {}),
+    ...(node.data.noteFormats?.length ? { noteFormats: node.data.noteFormats.map((range) => ({ ...range })) } : {}),
   },
 })
 
