@@ -30,6 +30,14 @@ document.querySelector('#run').onclick = async () => {
       await remount()
       same(readEditorValue(root()), { text: 'Root title', formats: [{ from: 0, to: 10, style: 'bold' }] })
     }],
+    ['italic text permits a visible slant for the upright-only app font', {
+      text: 'Italic',
+      formats: [{ from: 0, to: 6, style: 'italic' }],
+    }, async ({ root }) => {
+      const style = getComputedStyle(root().querySelector('em'))
+      same(style.fontStyle, 'italic')
+      same(style.fontSynthesis, 'style')
+    }],
     ...[['bold', 'KeyB'], ['italic', 'KeyI'], ['strike', 'KeyX']].flatMap(([style, code]) => [0, 3].map((from) => [
       `mixed ${style} selection beginning ${from ? 'plain' : 'styled'} applies style and undoes in one step`,
       { text: 'abcd', formats: [{ from, to: from + 1, style }] },
